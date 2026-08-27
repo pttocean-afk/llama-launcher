@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from llama_launcher.host import command_uses_port, llama_server_filename
 
 
@@ -10,3 +12,19 @@ def test_command_uses_explicit_port_forms():
 
 def test_platform_server_filename():
     assert llama_server_filename() in {"llama-server", "llama-server.exe"}
+
+
+def test_autostart_toggle(tmp_path, monkeypatch):
+    """Linux autostart writes/removes ~/.config/autostart/llama-launcher.desktop."""
+    import llama_launcher.host as host
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: home)
+    assert host.autostart_enabled() is False
+    assert host.set_autostart(True) is True
+    assert host.autostart_enabled() is True
+    desktop = home / ".config" / "autostart" / "llama-launcher.desktop"
+    assert desktop.exists()
+    assert "[Desktop Entry]" in desktop.read_text(encoding="utf-8")
+    assert host.set_autostart(False) is True
+    assert host.autostart_enabled() is False
+    assert not desktop.exists()

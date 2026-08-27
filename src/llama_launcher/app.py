@@ -22,18 +22,20 @@ from urllib.parse import urlparse
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from .config import load_profiles, load_settings, save_json
 from .diagnostics import collect_diagnostics, diagnostics_dict
 from .host import (
     IS_WINDOWS,
+    autostart_enabled,
     hidden_run_kwargs,
     list_llama_servers,
     llama_server_filename,
     nvidia_smi_path,
     open_external,
     pid_is_running,
+    set_autostart,
     terminate_process_tree,
 )
 from .migration import (
@@ -743,7 +745,7 @@ class ServerManager:
         if mmproj_path is not None:
             server_args += ["--mmproj", str(mmproj_path)]
         server_args += [
-            "-ngl", "999",
+            "-ngl", str(int(profile.get("ngl", 999))),
             "-c", str(ctx),
             "--host", "0.0.0.0",
             "--port", str(PORT),
@@ -1025,26 +1027,27 @@ class ControlServer:
 
 
 # ---------------------------------------------------------------- GUI
-# GPU 分配：口語選項 <-> 數值
+# GPU 分配：口語選項 <-> 數值。
+# 不做特定型號硬編碼（5070Ti 等只有特定使用者適用）；提供自動 + 自訂層數。
 GPU_OPTIONS = [
     ("自動（讓程式決定）", ""),
-    ("5070Ti 主力 (16:8)", "16,8"),
-    ("5070Ti 更多負擔 (18:6)", "18,6"),
-    ("3070Ti 分擔多一點 (8:16)", "8,16"),
+    ("自訂層數分配…", "__custom__"),
 ]
 
 def gpu_label_to_value(label: str) -> str:
     for name, val in GPU_OPTIONS:
         if name == label:
             return val
-    return "16,8"
+    # 未知 label 視為使用者直接輸入的數值（例如 "16,8"）
+    return (label or "").strip()
 
 def gpu_value_to_label(val: str) -> str:
     val = (val or "").strip()
     for name, v in GPU_OPTIONS:
         if v == val:
             return name
-    return "5070Ti 主力 (16:8)"
+    # 自訂數值（如 "16,8"）直接顯示原值
+    return val or "自動（讓程式決定）"
 
 
 class LogViewer(tk.Toplevel):
@@ -1359,21 +1362,16 @@ class LauncherApp:
                   relief="flat", bd=0, pady=8).pack(fill="x", padx=16)
         utility_row = tk.Frame(left, bg="#171e2a")
         utility_row.pack(fill="x", padx=16, pady=(8, 0))
-        tk.Button(utility_row, text="Remote Access", command=self.on_remote_access,
+        tk.Button(utility_row, text="Settings", command=self.on_global_settings,
                   font=("Segoe UI", 9, "bold"), bg="#253045", fg="#dce6f3",
                   activebackground="#34445f", activeforeground="white",
-                  relief="flat", pady=7).pack(side="left", fill="x", expand=True)
+                  relief="flat", padx=6, pady=9).pack(
+                      side="left", fill="x", expand=True)
         tk.Button(utility_row, text="Diagnostics", command=self.on_diagnostics,
                   font=("Segoe UI", 9, "bold"), bg="#253045", fg="#dce6f3",
                   activebackground="#34445f", activeforeground="white",
-                  relief="flat", pady=7).pack(side="left", fill="x", expand=True, padx=(8, 0))
-        utility_row2 = tk.Frame(left, bg="#171e2a")
-        utility_row2.pack(fill="x", padx=16, pady=(6, 0))
-        tk.Button(utility_row2, text="Import old launcher data",
-                  command=self.on_migrate_legacy,
-                  font=("Segoe UI", 9, "bold"), bg="#253045", fg="#dce6f3",
-                  activebackground="#34445f", activeforeground="white",
-                  relief="flat", pady=7).pack(fill="x")
+                  relief="flat", padx=6, pady=9).pack(
+                      side="left", fill="x", expand=True, padx=(8, 0))
 
         log_header = tk.Frame(right, bg="#141a24", height=46)
         log_header.pack(fill="x")
@@ -1695,6 +1693,9 @@ class LauncherApp:
                 value = "OK" if value else "Not ready"
             lines.append(f"{labels.get(key, key)}: {value or 'Not configured'}")
         messagebox.showinfo("Diagnostics", "\n".join(lines))
+
+    def on_global_settings(self):
+        GlobalSettingsDialog(self.root, self)
 
     # ---------------- remote control
     def remote_status(self) -> dict:
@@ -2320,24 +2321,30 @@ class ModelLibraryDialog(tk.Toplevel):
 
         actions = tk.Frame(self, bg="#111722")
         actions.pack(fill="x", padx=16, pady=(0, 16))
-        for text, command, color in (
-            ("★ Pin / Unpin", self.toggle_pin, "#2f74d0"),
-            ("↑", lambda: self.move(-1), "#273246"),
-            ("↓", lambda: self.move(1), "#273246"),
-            ("Settings", self.settings, "#273246"),
-            ("Delete", self.delete, "#8f3f48"),
-            ("Rescan", self.rescan, "#273246"),
-            ("Export", self._export, "#273246"),
-            ("Import", self._import, "#273246"),
-        ):
-            tk.Button(actions, text=text, command=command,
-                      font=("Segoe UI", 9, "bold"), bg=color, fg="white",
-                      activebackground="#3b4a63", activeforeground="white",
-                      relief="flat", padx=12, pady=7).pack(side="left", padx=(0, 7))
-        tk.Button(actions, text="Close", command=self.destroy,
-                  font=("Segoe UI", 9), bg="#273246", fg="white",
-                  activebackground="#3b4a63", activeforeground="white",
-                  relief="flat", padx=14, pady=7).pack(side="right")
+        # 兩排按鈕，避免太擁擠
+        action_rows = (
+            (("★ Pin / Unpin", self.toggle_pin), ("↑", lambda: self.move(-1)),
+             ("↓", lambda: self.move(1)), ("Settings", self.settings),
+             ("Delete", self.delete)),
+            (("Rescan", self.rescan), ("Export", self._export),
+             ("Import", self._import), ("Open config", self.app.open_config),
+             ("Close", self.destroy)),
+        )
+        for row_index, row in enumerate(action_rows):
+            for col_index, (text, command) in enumerate(row):
+                actions.columnconfigure(col_index, weight=1)
+                color = {
+                    "★ Pin / Unpin": "#2f74d0",
+                    "Delete": "#8f3f48",
+                    "Close": "#273246",
+                }.get(text, "#273246")
+                tk.Button(actions, text=text, command=command,
+                          font=("Segoe UI", 9, "bold"), bg=color, fg="white",
+                          activebackground="#3b4a63", activeforeground="white",
+                          relief="flat", padx=6, pady=6).grid(
+                              row=row_index, column=col_index, sticky="ew",
+                              padx=(0, 6) if col_index < 4 else (0, 0),
+                              pady=(0, 6) if row_index == 0 else (0, 0))
         self.refresh()
         entry.focus_set()
 
@@ -2423,6 +2430,129 @@ class ModelLibraryDialog(tk.Toplevel):
         self.refresh()
 
 
+class GlobalSettingsDialog(tk.Toplevel):
+    """全域設定：llama.cpp 路徑、開機啟動、關閉行為、Remote Access、舊資料匯入。
+
+    與 SettingsDialog（個別模型設定）分開，避免兩種設定混在一起。"""
+
+    def __init__(self, parent, app: LauncherApp):
+        super().__init__(parent)
+        self.app = app
+        self.title("設定（全域）")
+        self.geometry("560x560")
+        self.minsize(520, 500)
+        self.resizable(True, True)
+        self.transient(parent)
+        self.grab_set()
+
+        body = tk.Frame(self, padx=18, pady=14)
+        body.pack(fill="both", expand=True)
+
+        tk.Label(body, text="全域設定",
+                 font=("Segoe UI", 13, "bold")).pack(anchor="w")
+        tk.Label(body, text="這些設定影響整個 launcher，與個別模型無關。",
+                 font=("Segoe UI", 9), fg="#888").pack(anchor="w", pady=(2, 10))
+
+        # ---- llama.cpp 資料夾
+        tk.Label(body, text="llama.cpp 資料夾位置",
+                 font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        tk.Label(body, text="包含 llama-server 的那一層；模型在它的 models 子資料夾。",
+                 font=("Segoe UI", 8), fg="#888").pack(anchor="w", pady=(1, 4))
+        dir_row = tk.Frame(body)
+        dir_row.pack(fill="x")
+        self.dir_var = tk.StringVar(value=str(LLAMA_DIR))
+        self.dir_entry = tk.Entry(dir_row, textvariable=self.dir_var,
+                                  font=("Segoe UI", 9))
+        self.dir_entry.pack(side="left", fill="x", expand=True, ipady=3)
+
+        def browse_dir():
+            f = filedialog.askdirectory(initialdir=str(LLAMA_DIR))
+            if f:
+                self.dir_var.set(f)
+        tk.Button(dir_row, text="瀏覽…", command=browse_dir,
+                  padx=10, pady=3).pack(side="left", padx=(6, 0))
+        tk.Frame(body, height=1, bg="#ddd").pack(fill="x", pady=12)
+
+        # ---- 隨開機啟動
+        tk.Label(body, text="啟動行為", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        self.autostart_var = tk.BooleanVar(value=autostart_enabled())
+        tk.Checkbutton(
+            body, text="隨 Windows / Linux 登入自動啟動",
+            variable=self.autostart_var, anchor="w",
+            font=("Segoe UI", 9)).pack(fill="x", pady=(4, 0))
+        self.close_to_tray_var = tk.BooleanVar(
+            value=bool(_load_settings().get("close_to_tray", IS_WINDOWS)))
+        tk.Checkbutton(
+            body, text="關閉視窗時縮到系統匣（不勾 = 直接結束）",
+            variable=self.close_to_tray_var, anchor="w",
+            font=("Segoe UI", 9)).pack(fill="x", pady=(2, 0))
+        tk.Frame(body, height=1, bg="#ddd").pack(fill="x", pady=12)
+
+        # ---- Remote access
+        tk.Label(body, text="遠端控制", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        tk.Label(body, text="透過 Tailscale 從手機／其他電腦控制 llama-server。",
+                 font=("Segoe UI", 8), fg="#888").pack(anchor="w", pady=(1, 4))
+        tk.Button(body, text="設定 Remote Access（Tailscale Serve + Token）",
+                  command=self.app.on_remote_access,
+                  bg="#2f74d0", fg="white", activebackground="#3e86e2",
+                  activeforeground="white", relief="flat",
+                  pady=7).pack(fill="x")
+        tk.Frame(body, height=1, bg="#ddd").pack(fill="x", pady=12)
+
+        # ---- 舊資料匯入
+        tk.Label(body, text="資料", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        tk.Button(body, text="Import old launcher data（舊版 models.json / token）",
+                  command=self.app.on_migrate_legacy,
+                  font=("Segoe UI", 9), bg="#253045", fg="#dce6f3",
+                  activebackground="#34445f", activeforeground="white",
+                  relief="flat", pady=7).pack(fill="x")
+        tk.Button(body, text="開啟 profiles.json（手動編輯模型清單）",
+                  command=self.app.open_config,
+                  font=("Segoe UI", 9), bg="#253045", fg="#dce6f3",
+                  activebackground="#34445f", activeforeground="white",
+                  relief="flat", pady=7).pack(fill="x", pady=(6, 0))
+
+        btns = tk.Frame(self, padx=18, pady=12)
+        btns.pack(fill="x")
+        tk.Button(btns, text="儲存", command=self.save,
+                  font=("Segoe UI", 10, "bold"), width=12,
+                  bg="#2f6fed", fg="white",
+                  activebackground="#2456c0", activeforeground="white",
+                  padx=16, pady=7).pack(side="right")
+        tk.Button(btns, text="取消", command=self.destroy,
+                  font=("Segoe UI", 10), width=12,
+                  padx=16, pady=7).pack(side="right", padx=(0, 10))
+
+    def save(self):
+        new_dir = self.dir_var.get().strip()
+        if new_dir and str(Path(new_dir).resolve()) != str(LLAMA_DIR.resolve()):
+            ok = update_llama_dir(new_dir)
+            if not ok:
+                messagebox.showerror(
+                    "資料夾位置錯誤",
+                    f"在 {new_dir} 找不到 {llama_server_filename()}。\n"
+                    f"請確認資料夾位置正確（要能看得到 {llama_server_filename()} 那層）。",
+                    parent=self)
+                return
+            invalidate_model_inventory()
+            self.app.cfg = load_config()
+            self.app.profiles = merge_profiles(self.app.cfg)
+            self.app.refresh_listbox()
+            self.app.update_detail()
+
+        settings = _load_settings()
+        settings["close_to_tray"] = bool(self.close_to_tray_var.get())
+        _save_settings(settings)
+
+        if not set_autostart(bool(self.autostart_var.get())):
+            messagebox.showwarning(
+                "開機啟動設定失敗",
+                "無法寫入開機啟動設定（可能權限不足），其他設定已儲存。",
+                parent=self)
+        self.destroy()
+        messagebox.showinfo("已儲存", "全域設定已更新。")
+
+
 class SettingsDialog(tk.Toplevel):
     """口語化設定視窗：把技術參數翻譯成一般人看得懂的選項。"""
 
@@ -2456,24 +2586,10 @@ class SettingsDialog(tk.Toplevel):
         body = tk.Frame(self, padx=16, pady=12)
         body.pack(side="top", fill="both", expand=True)
 
-        tk.Label(body, text="設定",
+        tk.Label(body, text="個別模型設定",
                  font=("Segoe UI", 11, "bold")).pack(anchor="w")
-
-        # ---- 全域：llama.cpp 資料夾位置
-        tk.Label(body, text="llama.cpp 資料夾位置（全體適用）",
-                 font=("Segoe UI", 9), fg="#333", anchor="w").pack(fill="x", pady=(8, 2))
-        dir_row = tk.Frame(body)
-        dir_row.pack(fill="x")
-        self.dir_var = tk.StringVar(value=str(LLAMA_DIR))
-        self.dir_entry = tk.Entry(dir_row, textvariable=self.dir_var)
-        self.dir_entry.pack(side="left", fill="x", expand=True)
-
-        def browse_dir():
-            f = filedialog.askdirectory(initialdir=str(LLAMA_DIR))
-            if f:
-                self.dir_var.set(f)
-        tk.Button(dir_row, text="瀏覽…", command=browse_dir).pack(side="left", padx=(6, 0))
-        tk.Frame(body, height=1, bg="#ddd").pack(fill="x", pady=10)
+        tk.Label(body, text="全域設定（llama.cpp 路徑、開機啟動、Remote Access）請到主畫面 Settings。",
+                 font=("Segoe UI", 8), fg="#888", anchor="w").pack(anchor="w", pady=(2, 6))
 
         tk.Label(body, text=f"模型：{profile.get('name','')}",
                  font=("Segoe UI", 9), fg="#666", anchor="w").pack(anchor="w", pady=(0, 8))
@@ -2581,12 +2697,41 @@ class SettingsDialog(tk.Toplevel):
         # ---- 顯示卡分配
         tk.Label(body, text="顯示卡分配", font=("Segoe UI", 9),
                  anchor="w").pack(fill="x", pady=(8, 2))
-        self.gpu_var = tk.StringVar(
-            value=gpu_value_to_label(profile.get("gpu_split", "16,8")))
+        gpu_values = [o[0] for o in GPU_OPTIONS]
+        current_gpu = gpu_value_to_label(profile.get("gpu_split", ""))
+        if current_gpu not in gpu_values and current_gpu:
+            gpu_values.append(current_gpu)
+        self.gpu_var = tk.StringVar(value=current_gpu)
+        self.gpu_custom_var = tk.StringVar(
+            value=profile.get("gpu_split", "") or "")
         self.gpu_combo = ttk.Combobox(body, textvariable=self.gpu_var,
-                                      values=[o[0] for o in GPU_OPTIONS],
+                                      values=gpu_values,
                                       state="readonly", width=28)
         self.gpu_combo.pack(fill="x")
+
+        def on_gpu_custom(_event=None):
+            if self.gpu_var.get() != "自訂層數分配…":
+                return
+            value = simpledialog.askstring(
+                "自訂顯示卡分配",
+                "請輸入各 GPU 的層數，逗號分隔（例：16,8 = GPU0 16 層、GPU1 8 層）。\n"
+                "留空 = 自動。",
+                initialvalue=self.gpu_custom_var.get() or "16,8",
+                parent=self)
+            if value is None:
+                self.gpu_var.set(current_gpu or "自動（讓程式決定）")
+                return
+            value = value.strip()
+            self.gpu_custom_var.set(value)
+            if value:
+                self.gpu_var.set(f"自訂：{value}")
+            else:
+                self.gpu_var.set("自動（讓程式決定）")
+
+        self.gpu_combo.bind("<<ComboboxSelected>>", on_gpu_custom)
+        tk.Label(body, text="例：16,8 = 第一張卡分 16 層、第二張分 8 層。"
+                            "實際可用層數取決於模型與 VRAM。",
+                 font=("Segoe UI", 8), fg="#888", anchor="w").pack(anchor="w")
         # ---- KV 快取精度
         tk.Label(body, text="KV 快取精度", font=("Segoe UI", 9),
                  anchor="w").pack(fill="x", pady=(8, 2))
@@ -2614,24 +2759,52 @@ class SettingsDialog(tk.Toplevel):
             tk.Radiobutton(pr, text=label, variable=self.parallel_var,
                            value=val).pack(side="left")
 
-    def save(self):
-        """先處理全域 llama 資料夾，再把口語選項寫回 profile 並存檔。"""
-        # ---- 全域：llama.cpp 資料夾位置
-        new_dir = self.dir_var.get().strip()
-        if new_dir and str(Path(new_dir).resolve()) != str(LLAMA_DIR.resolve()):
-            ok = update_llama_dir(new_dir)
-            if not ok:
-                messagebox.showerror(
-                    "資料夾位置錯誤",
-                    f"在 {new_dir} 找不到 {llama_server_filename()}。\n"
-                    f"請確認資料夾位置正確（要能看得到 {llama_server_filename()} 那層）。")
-                return
-            # 路徑更新後重新掃描模型
-            self.app.cfg = load_config()
-            self.app.profiles = merge_profiles(self.app.cfg)
-            self.app.refresh_listbox()
-            self.app.update_detail()
+        # ---- GPU offload 層數（-ngl）
+        tk.Label(body, text="GPU 卸載層數（-ngl）", font=("Segoe UI", 9),
+                 anchor="w").pack(fill="x", pady=(8, 2))
+        ngl_values = ["全部（999）", "64", "32", "16"]
+        current_ngl = str(profile.get("ngl", 999))
+        self.ngl_var = tk.StringVar(
+            value=current_ngl if current_ngl in ngl_values else "全部（999）")
+        self.ngl_custom_var = tk.StringVar(value=current_ngl)
+        self.ngl_combo = ttk.Combobox(body, textvariable=self.ngl_var,
+                                      values=ngl_values, state="readonly")
+        self.ngl_combo.pack(fill="x")
 
+        def on_ngl_custom(_event=None):
+            if self.ngl_var.get() != "全部（999）":
+                return
+            value = simpledialog.askstring(
+                "自訂 GPU 層數",
+                "輸入要卸載到 GPU 的層數（例如 48）。\n"
+                "999 = 全部層數都放 GPU；較小值 = 部分層數留給 CPU。",
+                initialvalue=self.ngl_custom_var.get() or "999",
+                parent=self)
+            if value is None:
+                self.ngl_var.set(self.ngl_custom_var.get() or "全部（999）")
+                return
+            value = value.strip()
+            if value and value != "999":
+                self.ngl_custom_var.set(value)
+                self.ngl_var.set(value)
+            else:
+                self.ngl_var.set("全部（999）")
+
+        self.ngl_combo.bind("<<ComboboxSelected>>", on_ngl_custom)
+
+        # ---- 進階參數（extra args）
+        tk.Label(body, text="進階參數（extra args）", font=("Segoe UI", 9),
+                 anchor="w").pack(fill="x", pady=(8, 2))
+        self.extra_args_var = tk.StringVar(value=profile.get("extra_args", "") or "")
+        tk.Entry(body, textvariable=self.extra_args_var,
+                 font=("Consolas", 9)).pack(fill="x", ipady=3)
+        tk.Label(body, text="給進階使用者：直接編輯額外的 llama-server 參數。"
+                            "KV 快取、並行數、Jinja 由上方選項管理，會自動保留。",
+                 font=("Segoe UI", 8), fg="#888", anchor="w",
+                 wraplength=540, justify="left").pack(anchor="w", pady=(2, 0))
+
+    def save(self):
+        """把口語選項寫回 profile 並存檔（全域設定在主畫面 Settings）。"""
         p = self.profile
         try:
             ctx_val = parse_context_k(self.ctx_var.get())
@@ -2649,15 +2822,23 @@ class SettingsDialog(tk.Toplevel):
 
         p["default_ctx"] = ctx_val
         p["reasoning"] = self.reasoning_var.get()
-        p["gpu_split"] = gpu_label_to_value(self.gpu_var.get())
+        gpu_label = self.gpu_var.get()
+        if gpu_label == "自訂層數分配…":
+            # combo 只選了選項但沒輸入數值：直接取暫存的自訂值
+            p["gpu_split"] = self.gpu_custom_var.get().strip()
+        elif gpu_label.startswith("自訂："):
+            p["gpu_split"] = gpu_label[3:].strip()
+        else:
+            p["gpu_split"] = gpu_label_to_value(gpu_label)
         p["backend"] = self.backend_var.get().lower()
         p["mtp"] = self.mtp_var.get() == "On"
         p["jinja"] = self.jinja_var.get()
         p["mmproj"] = mmproj
         p["vision_enabled"] = bool(mmproj) and self.vision_enabled_var.get()
 
-        # 組 extra_args：保留 -b/-ub 等手動參數，只更新 GUI 管理的 KV/parallel/Jinja。
-        extra = preserve_unmanaged_extra_args(p.get("extra_args", ""))
+        # 組 extra_args：GUI 管理的 KV/parallel 由選項產生；
+        # 使用者在進階參數框輸入的其他參數（-b/-ub 等）保留。
+        extra = preserve_unmanaged_extra_args(self.extra_args_var.get())
         kv_label = self.kv_var.get()
         kv_mode = next((value for label, value in KV_OPTIONS if label == kv_label), "q4")
         p["kv_mode"] = kv_mode
@@ -2669,6 +2850,15 @@ class SettingsDialog(tk.Toplevel):
             extra += ["-ctk", "f16", "-ctv", "f16"]
         extra += ["--parallel", self.parallel_var.get()]
         p["extra_args"] = " ".join(extra)
+
+        # GPU 卸載層數
+        ngl_label = self.ngl_var.get()
+        if ngl_label == "全部（999）":
+            p["ngl"] = 999
+        elif ngl_label.isdigit():
+            p["ngl"] = int(ngl_label)
+        else:
+            p["ngl"] = int(self.ngl_custom_var.get() or 999)
 
         # 存回 cfg
         cfg = self.app.cfg

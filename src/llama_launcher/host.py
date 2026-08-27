@@ -118,3 +118,69 @@ def open_external(target: str | Path) -> bool:
         return True
     except OSError:
         return False
+
+
+# ---------------------------------------------------------------- autostart
+def _launch_command() -> str:
+    """Command that starts the launcher at sign-in (frozen or dev)."""
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}"'
+    return f'"{sys.executable}" -m llama_launcher'
+
+
+def autostart_enabled() -> bool:
+    """Whether the launcher is registered to start at sign-in."""
+    if IS_WINDOWS:
+        try:
+            import winreg
+            with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    r"Software\Microsoft\Windows\CurrentVersion\Run") as key:
+                winreg.QueryValueEx(key, "LlamaLauncher")
+            return True
+        except OSError:
+            return False
+    desktop = Path.home() / ".config" / "autostart" / "llama-launcher.desktop"
+    return desktop.exists()
+
+
+def set_autostart(enabled: bool) -> bool:
+    """Register / unregister the launcher at sign-in. Returns success."""
+    if IS_WINDOWS:
+        try:
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Run",
+                0, winreg.KEY_SET_VALUE)
+            if enabled:
+                winreg.SetValueEx(key, "LlamaLauncher", 0,
+                                  winreg.REG_SZ, _launch_command())
+            else:
+                try:
+                    winreg.DeleteValue(key, "LlamaLauncher")
+                except FileNotFoundError:
+                    pass
+            winreg.CloseKey(key)
+            return True
+        except OSError:
+            return False
+    autostart_dir = Path.home() / ".config" / "autostart"
+    desktop = autostart_dir / "llama-launcher.desktop"
+    if enabled:
+        try:
+            autostart_dir.mkdir(parents=True, exist_ok=True)
+            desktop.write_text(
+                "[Desktop Entry]\nType=Application\n"
+                "Name=Llama Launcher\n"
+                f"Exec={_launch_command()}\n"
+                "X-GNOME-Autostart-enabled=true\n",
+                encoding="utf-8")
+            return True
+        except OSError:
+            return False
+    try:
+        desktop.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False
