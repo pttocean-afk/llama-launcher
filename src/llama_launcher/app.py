@@ -396,17 +396,15 @@ def merge_profiles(cfg: dict) -> list[dict]:
 
 # ---------------------------------------------------------------- 工具
 def enable_dpi_awareness():
-    """宣告 DPI awareness，避免 Windows 位圖縮放導致字體模糊。"""
+    """宣告 system-DPI-aware，避免 Windows 位圖縮放導致字體模糊。
+
+    刻意不用 per-monitor v2（SetProcessDpiAwareness(2)）：Tk 8.6 只在啟動時
+    讀一次 DPI，窗口移動/跨 DPI 邊界時不會重新縮放，Windows 被迫對 Tk 輸出
+    做額外縮放處理，會讓拖動窗口明顯卡頓。system-DPI-aware 下 Tk 自己用
+    `tk scaling` 調整字體，拖動最流暢。"""
     try:
         import ctypes
-        # Windows 10 1803+ 用 per-monitor v2；失敗退回 system DPI aware
-        try:
-            ctypes.windll.shcore.SetProcessDpiAwareness(2)
-        except Exception:
-            try:
-                ctypes.windll.user32.SetProcessDPIAware()
-            except Exception:
-                pass
+        ctypes.windll.user32.SetProcessDPIAware()
     except Exception:
         pass
 
@@ -474,7 +472,8 @@ def port_in_use(port: int) -> bool:
     """直接 socket 連線測試 port 是否有人監聽（比 parse netstat 可靠）。"""
     import socket
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(1.0)
+    # 本機連線測試 0.3s 綽綽有餘；縮短避免主執行緒被卡住。
+    s.settimeout(0.3)
     try:
         s.connect(("127.0.0.1", port))
         return True
@@ -2004,7 +2003,8 @@ class LauncherApp:
             return
         if self.root.state() != "withdrawn":
             self._reload_embedded_log()
-        self.root.after(1000, self._poll_embedded_log)
+        # 1s→2s：log 更新不需要那麼頻繁，減少 Windows 主執行緒活動。
+        self.root.after(2000, self._poll_embedded_log)
 
     def on_add_model(self):
         AddModelDialog(self.root, self)
@@ -2130,7 +2130,10 @@ class LauncherApp:
                 "請重新啟動 Windows，或改用較低 context後再試。",
             )
         self._update_server_ui()
-        self.root.after(2000, self._poll_server_status)
+        # server 執行中 2s 輪詢（狀態/uptime 要即時）；idle 時 5s 就夠，
+        # 盡量減少 Windows 上主執行緒的定時活動。
+        delay = 2000 if self.server.running else 5000
+        self.root.after(delay, self._poll_server_status)
 
     def _update_server_ui(self):
         running = self.server.running
