@@ -36,6 +36,12 @@ from .host import (
     pid_is_running,
     terminate_process_tree,
 )
+from .migration import (
+    detect_legacy_dir,
+    merge_legacy_into_config,
+    migrate_legacy_data,
+    plan_migration,
+)
 from .paths import logs_dir, profiles_path, resource_dir, settings_path, token_path
 from .remote_setup import configure_remote_access
 from .security import ensure_control_token
@@ -1352,6 +1358,13 @@ class LauncherApp:
                   font=("Segoe UI", 9, "bold"), bg="#253045", fg="#dce6f3",
                   activebackground="#34445f", activeforeground="white",
                   relief="flat", pady=7).pack(side="left", fill="x", expand=True, padx=(8, 0))
+        utility_row2 = tk.Frame(left, bg="#171e2a")
+        utility_row2.pack(fill="x", padx=16, pady=(6, 0))
+        tk.Button(utility_row2, text="Import old launcher data",
+                  command=self.on_migrate_legacy,
+                  font=("Segoe UI", 9, "bold"), bg="#253045", fg="#dce6f3",
+                  activebackground="#34445f", activeforeground="white",
+                  relief="flat", pady=7).pack(fill="x")
 
         log_header = tk.Frame(right, bg="#141a24", height=46)
         log_header.pack(fill="x")
@@ -1393,6 +1406,21 @@ class LauncherApp:
         self.root.after(500, self._poll_embedded_log)
         if not LLAMA_SERVER.exists():
             self.root.after(900, self.run_first_setup)
+        # First run with an empty profile list: offer to migrate the old launcher data.
+        if not self.profiles:
+            self.root.after(1500, self._maybe_offer_legacy_migration)
+
+    def _maybe_offer_legacy_migration(self):
+        if self.profiles:
+            return
+        candidates = self._candidate_legacy_dirs()
+        if not candidates:
+            return
+        if messagebox.askyesno(
+                "Import old launcher data?",
+                f"Found old launcher data in\n{candidates[0]}\n\n"
+                "Copy profiles and control token into the new data directory?"):
+            self._do_migrate_legacy(candidates[0])
 
     # ---------------- setup / diagnostics
     def run_first_setup(self):
@@ -1417,6 +1445,113 @@ class LauncherApp:
         if messagebox.askyesno(
                 "Remote access", "Configure secure Tailscale Serve remote access now?"):
             self.on_remote_access()
+
+    # ---------------- legacy migration
+    def _candidate_legacy_dirs(self) -> list[Path]:
+        """Folders worth offering as migration sources (most specific first)."""
+        candidates: list[Path] = []
+        try:
+            current = _load_settings().get("llama_dir")
+            if current:
+                candidates.extend([Path(current) / "launcher-app", Path(current)])
+        except (OSError, ValueError):
+            pass
+        if os.name == "nt":
+            drive = Path(os.environ.get("SystemDrive", "C:") or "C:")
+            candidates.extend([
+                drive / "llama-cpp" / "launcher-app",
+                drive / "llama-cpp",
+            ])
+            local = os.environ.get("LOCALAPPDATA")
+            if local:
+                candidates.append(Path(local) / "llama-cpp" / "launcher-app")
+        else:
+            home = Path.home()
+            candidates.extend([home / "llama-cpp" / "launcher-app", home / "llama-cpp"])
+        seen: set[Path] = set()
+        unique: list[Path] = []
+        for cand in candidates:
+            try:
+                cand = cand.expanduser()
+            except (OSError, ValueError):
+                continue
+            if cand in seen or not cand.is_dir():
+                continue
+            seen.add(cand)
+            if detect_legacy_dir(cand):
+                unique.append(cand)
+        return unique
+
+    def on_migrate_legacy(self, auto=False):
+        """Migrate old-launcher profiles/settings/token into the new data dir.
+
+        With auto=True (startup) the first detected folder migrates without
+        prompts; otherwise the user picks the folder in a dialog.
+        """
+        candidates = self._candidate_legacy_dirs()
+        legacy = candidates[0] if (auto and candidates) else None
+        if legacy is None and not auto:
+            if candidates:
+                legacy = filedialog.askdirectory(
+                    title="Choose the old launcher folder (llama-launcher.pyw + models.json)",
+                    initialdir=str(candidates[0]), mustexist=True)
+            else:
+                legacy = filedialog.askdirectory(
+                    title="Choose the old launcher folder (llama-launcher.pyw + models.json)",
+                    mustexist=True)
+        if not legacy:
+            if not auto:
+                messagebox.showinfo("No legacy folder found",
+                                    "No old launcher folder with models.json was found.")
+            return
+        if not detect_legacy_dir(legacy):
+            if not auto:
+                messagebox.showwarning(
+                    "Not a legacy folder",
+                    f"{legacy} does not contain models.json, settings.json, or control-token.txt.")
+            return
+        self._do_migrate_legacy(Path(legacy))
+
+    def _do_migrate_legacy(self, legacy: Path):
+        """Run the migration and refresh the UI. Returns the result for tests."""
+        data_dir = SETTINGS_PATH.parent
+        plan = plan_migration(legacy, data_dir)
+        if plan.is_empty:
+            messagebox.showwarning(
+                "Nothing to migrate",
+                f"{legacy} contains no recognizable launcher data.")
+            return None
+        if plan.will_copy:
+            confirm = (f"Copy {', '.join(plan.will_copy)} "
+                       + (f"(skip existing: {', '.join(plan.will_skip)}) " if plan.will_skip else "")
+                       + f"from\n{legacy}?\n\nProfiles already present in the new app keep their settings.")
+        else:
+            confirm = ("All files are already present in the new data directory.\n"
+                       "Merge profile lists anyway?")
+        if not messagebox.askyesno("Migrate old launcher data", confirm):
+            return None
+        result = migrate_legacy_data(legacy, data_dir)
+        merged_note = ""
+        added = merge_legacy_into_config(legacy, CONFIG_PATH)
+        if added:
+            merged_note = f"\n\nMerged {added} profile(s) not already present."
+        cfg = load_config()
+        if result.copied or result.skipped:
+            detail = []
+            if result.copied:
+                detail.append("Copied: " + ", ".join(result.copied))
+            if result.skipped:
+                detail.append("Skipped (already present): " + ", ".join(result.skipped))
+            messagebox.showinfo(
+                "Migration complete",
+                "\n".join(detail) + merged_note +
+                "\n\nProfiles and token are now in the new data directory.",
+            )
+        self.cfg = cfg
+        self.profiles = merge_profiles(self.cfg)
+        self.refresh_listbox()
+        self.update_detail()
+        return result
 
     def on_remote_access(self):
         manager = TailscaleManager()
