@@ -1,0 +1,28 @@
+__pycache__/
+*.py[cod]
+.venv/
+.venv-*/
+build/
+dist/
+*.spec
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime and private data
+/data/
+logs/
+secrets/
+control-token.txt
+profiles.json
+settings.json
+*.gguf
+*.log
+*.bak*
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

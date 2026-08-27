@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Llama Launcher
+Comment=Manage local llama.cpp servers and Tailscale remote access
+Exec=LlamaLauncher
+Icon=llama-launcher
+Terminal=false
+Categories=Utility;Development;

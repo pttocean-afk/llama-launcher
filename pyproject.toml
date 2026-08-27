@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llama-launcher-control"
+version = "0.1.0"
+description = "Cross-platform llama.cpp launcher with tray UI and Tailscale remote control"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["Pillow>=10.0", "pystray>=0.19", "psutil>=5.9"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pyinstaller>=6"]
+
+[project.gui-scripts]
+llama-launcher = "llama_launcher.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+llama_launcher = ["assets/*.png", "assets/*.ico"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
