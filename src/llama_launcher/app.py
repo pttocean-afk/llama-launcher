@@ -501,6 +501,7 @@ class ServerManager:
         self.degraded_reason = ""
         self.degraded_warning_shown = False
         self._health_scan_offset = 0
+        self._health_scan_size = -1
         self.preflight_summary = ""
 
     @staticmethod
@@ -557,6 +558,7 @@ class ServerManager:
                     if model_name in header:
                         self.log_path = candidate
                         self._health_scan_offset = candidate.stat().st_size
+                        self._health_scan_size = self._health_scan_offset
                         break
                 except OSError:
                     continue
@@ -810,21 +812,27 @@ class ServerManager:
         self.degraded_reason = ""
         self.degraded_warning_shown = False
         self._health_scan_offset = 0
+        self._health_scan_size = -1
         return True, f"已啟動 {self.profile_name} (PID {self.proc.pid})"
 
     def scan_runtime_health(self):
-        """從新增 log 內容偵測會讓雙 GPU 推論大幅掉速的 runtime fallback。"""
+        """從新增 log 內容偵測會讓雙 GPU 推論大幅掉速的 runtime fallback。
+
+        先 stat 比對大小，log 沒新增就不開檔（每秒輪詢時避免磁碟 IO）。"""
         p = self.log_path
         if p is None or not p.exists():
             return
         try:
             size = p.stat().st_size
+            if size == self._health_scan_size and self._health_scan_offset > 0:
+                return
             if self._health_scan_offset > size:
                 self._health_scan_offset = 0
             with open(p, "rb") as fh:
                 fh.seek(self._health_scan_offset)
                 chunk = fh.read(size - self._health_scan_offset)
                 self._health_scan_offset = fh.tell()
+                self._health_scan_size = size
             text = chunk.decode("utf-8", errors="replace")
             if "retrying without pipeline parallelism" in text:
                 self.degraded_reason = (
@@ -1182,6 +1190,8 @@ class LauncherApp:
         self.server.adopt_existing_server()
         # Tk 主執行緒與 remote HTTP thread 共用，避免同時 start/stop 同一個 server。
         self.server_lock = threading.Lock()
+        # psutil 全系統掃描很貴（Windows 上可能幾百 ms）；adopt 嘗試做節流。
+        self._last_adopt_attempt = 0.0
         self.control_server = None
         self.control_error = ""
         try:
@@ -1961,6 +1971,9 @@ class LauncherApp:
             return
         try:
             size = p.stat().st_size
+            # 沒新增內容就不開檔（每秒輪詢時避免磁碟 IO）
+            if size == self._log_last_offset and self._log_last_offset > 0:
+                return
             if self._log_last_offset > size:
                 self._log_last_offset = 0
             skipped = False
@@ -2088,11 +2101,19 @@ class LauncherApp:
         open_external(CONFIG_PATH)
 
     # ---------------- 狀態輪詢
+    # adopt 掃描節流秒數：避免每秒 psutil 全系統掃描拖住 UI。
+    ADOPT_SCAN_INTERVAL = 10.0
+
     def _poll_server_status(self):
         if self.quitting:
             return
         if not self.server.running and port_in_use(PORT):
-            self.server.adopt_existing_server()
+            # 8080 被占但不確定是不是 llama-server：只有掃描能確認。
+            # 節流：10 秒內最多掃一次，避免每秒全系統 psutil 掃描。
+            now = time.monotonic()
+            if now - self._last_adopt_attempt >= self.ADOPT_SCAN_INTERVAL:
+                self._last_adopt_attempt = now
+                self.server.adopt_existing_server()
         self.server.scan_runtime_health()
         if self.server.degraded_reason and not self.server.degraded_warning_shown:
             self.server.degraded_warning_shown = True
@@ -2109,7 +2130,7 @@ class LauncherApp:
                 "請重新啟動 Windows，或改用較低 context後再試。",
             )
         self._update_server_ui()
-        self.root.after(1000, self._poll_server_status)
+        self.root.after(2000, self._poll_server_status)
 
     def _update_server_ui(self):
         running = self.server.running
