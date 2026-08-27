@@ -42,9 +42,13 @@
 
 ## 📸 畫面
 
-> 〔截圖待補〕把主畫面截圖存成 `docs/screenshot.png` 即可顯示：
-
 ![LlamaLauncher 主畫面](docs/screenshot.png)
+
+*主畫面：Favorite Models、整合 Log、一鍵 Start/Stop*
+
+![LlamaLauncher 遠端啟動介面](docs/remote.png)
+
+*Tailscale 遠端控制頁：狀態、模型、Start/Stop、Log*
 
 ---
 
@@ -155,3 +159,103 @@ CI：`.github/workflows/` 提供 Windows / Linux 自動 build＋test。
 
 - [llama.cpp](https://github.com/ggerganov/llama.cpp)
 - [pystray](https://github.com/moses-palmer/pystray)、[psutil](https://github.com/giampaolo/psutil)、[Tailscale](https://tailscale.com)
+
+---
+
+# English
+
+## 🦙 Llama Launcher
+
+**A cross-platform desktop control center for local `llama.cpp` servers — Windows / Linux.**
+
+Launch, adopt, log, and remotely control your local llama.cpp server from one
+window — no terminal, no remembering flags.
+
+## Why
+
+Running local llama.cpp is fiddly: model-specific flags, terminal logs, manual
+GPU split, and remote access are a pain. **Llama Launcher** wraps it all up:
+
+- **Model profiles** — save each model's context, GPU split, KV precision,
+  reasoning, and vision settings independently, then launch with one click.
+- **Process adoption** — detects an already-running `llama-server --port 8080`
+  and manages it without a restart.
+- **Integrated log panel** — warnings when the Vulkan runtime falls back to a
+  slow no-parallel-pipeline mode.
+- **Tailscale remote control** — a secure HTTPS control page (Bearer token)
+  accessible from your phone or another machine.
+- **One shared core on both OSes** — identical behavior on Windows and Linux.
+
+## Feature snapshot
+
+| Feature | Description |
+|---|---|
+| Model profiles | Per-model context / GPU split / KV / reasoning / vision |
+| GPU split | Auto, or custom layers per GPU (e.g. `16,8`); presets remembered & removable |
+| One-click start | Builds `-ngl -c -ts -ctk/ctv --parallel` args for you |
+| Live logs | Embedded log viewer with Vulkan-fallback warnings |
+| Process adoption | Manages an existing 8080 server without restarting it |
+| Tailscale Serve | HTTPS remote page + Bearer token, localhost-bound behind Tailscale |
+| Global / per-model settings | Autostart, llama.cpp path, remote access = global |
+| Legacy migration | Import old profiles / token in one click |
+| Profile export/import | Portable JSON (no local absolute paths) |
+
+## Quick start
+
+**Windows:** grab `LlamaLauncher-Setup-x64.exe` or `LlamaLauncher-Portable-x64.zip`
+from [Releases](https://github.com/your-user/llama-launcher/releases). Pick the
+folder containing `llama-server.exe`, drop GGUFs into its `models` subfolder,
+select a model, press **START SERVER**.
+
+**Linux (x86_64):**
+
+```bash
+wget -c https://github.com/your-user/llama-launcher/releases/latest/download/LlamaLauncher-Linux-x86_64.tar.gz
+tar -xzf LlamaLauncher-Linux-x86_64.tar.gz
+./LlamaLauncher/LlamaLauncher
+```
+
+## Remote access (Tailscale)
+
+Main screen → **Settings → Remote Access**. The app sets up Tailscale Serve and
+shows an HTTPS URL plus a private control token. Open the URL elsewhere, paste
+the token, and you can view status, pick a model, and start/stop the server.
+
+The control API binds only to `127.0.0.1:8765` and is exposed exclusively
+through Tailscale Serve HTTPS; every `/api/*` route requires a Bearer token.
+The inference port `8080` is never exposed as the control channel.
+
+## Data locations
+
+| Platform | User data |
+|---|---|
+| Windows | `%LOCALAPPDATA%\LlamaLauncher` |
+| Linux | `$XDG_DATA_HOME/LlamaLauncher` or `~/.local/share/LlamaLauncher` |
+| Test override | `LLAMA_LAUNCHER_DATA_DIR` env var |
+
+## Development
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e '.[dev]'
+.venv/bin/pytest
+```
+
+**Windows build**
+
+```powershell
+.\scripts\build-windows.ps1
+.\scripts\build-installer.ps1
+```
+
+**Linux build** (use the distribution system Python with Tk installed)
+
+```bash
+sudo apt-get install python3-tk python3-venv xvfb
+python3 -m venv .venv-build
+PATH="$PWD/.venv-build/bin:$PATH" bash scripts/build-linux.sh
+```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
