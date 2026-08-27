@@ -1291,9 +1291,7 @@ class LauncherApp:
         dashboard = tk.PanedWindow(root, orient="horizontal", sashwidth=7,
                                    sashrelief="flat", bg="#0d1118",
                                    bd=0, relief="flat")
-        # 四邊留白均勻：左右 dashboard padx 12 + 內容 padx 16 = 28；
-        # 底部也留 28，讓左下角按鈕不會貼邊。
-        dashboard.pack(fill="both", expand=True, padx=12, pady=(12, 28))
+        dashboard.pack(fill="both", expand=True, padx=12, pady=12)
 
         left = tk.Frame(dashboard, bg="#171e2a", width=350,
                         highlightthickness=1, highlightbackground="#293244")
@@ -1397,7 +1395,8 @@ class LauncherApp:
                   activebackground="#34445f", activeforeground="white",
                   relief="flat", bd=0, pady=8).pack(fill="x", padx=16)
         utility_row = tk.Frame(left, bg="#171e2a")
-        utility_row.pack(fill="x", padx=16, pady=(8, 0))
+        # 底部也留 16px，跟左右 padx=16 一致，避免按鈕貼到面板底邊。
+        utility_row.pack(fill="x", padx=16, pady=(8, 16))
         tk.Button(utility_row, text="Settings", command=self.on_global_settings,
                   font=("Segoe UI", 9, "bold"), bg="#253045", fg="#dce6f3",
                   activebackground="#34445f", activeforeground="white",
