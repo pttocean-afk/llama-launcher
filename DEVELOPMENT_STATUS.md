@@ -23,13 +23,13 @@ Llama Launcher must run natively on both Windows and Linux because the managed `
 
 - Linux unit suite: 10 passed.
 - Python source and tests compile on Linux.
-- Windows prototype artifact previously passed 8 tests and adopted the running Vulkan server without restarting it; it must be rebuilt after the cross-platform process-layer change.
+- Windows x64 Portable ZIP and per-user Setup EXE rebuilt after the cross-platform process-layer change; Windows test suite: 10 passed.
+- Rebuilt Windows artifact started successfully, served Tailscale HTTPS with HTTP 200, and adopted the live Vulkan llama-server PID 22092 without restart.
 - Linux system-Python artifact starts under Xvfb and serves the dashboard with HTTP 200.
 - First Linux build made with Hermes Python failed due missing `libtcl9.0.so`; build procedure was corrected to distribution system Python plus `python3-tk`.
 
 ## Remaining before v1.0
 
-- Rebuild and re-smoke-test the Windows artifacts after cross-platform refactor.
 - Validate a real native Linux `llama-server` start/stop/adopt cycle on a Linux GPU host.
 - Validate tray behavior in an actual GNOME/KDE desktop session; Xvfb has no tray manager.
 - Replace the hard-coded Windows VRAM preflight with optional host-policy configuration.
