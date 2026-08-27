@@ -34,9 +34,22 @@ Llama Launcher must run natively on both Windows and Linux because the managed `
   remote start/stop, bind-failure observability (requires a display; run under xvfb-run),
   and a real HTTP round-trip through `ControlServer` (auth 401 + token + profile start).
 
+## Legacy migration (2026-08-27, DSH)
+
+- `migration.py` extended: `detect_legacy_dir`, `plan_migration` (dry-run preview),
+  `merge_legacy_into_config` (in-place idempotent merge, new-app settings win),
+  `save_cfg` (atomic write). `migrate_legacy_data` now merges profiles into an existing
+  config instead of skipping the file.
+- `app.py`: `on_migrate_legacy` / `_do_migrate_legacy` / `_maybe_offer_legacy_migration`
+  + "Import old launcher data" button. Auto-offers on first run when no profiles exist
+  and a legacy folder is detected (checks `llama_dir` setting, `~/llama-cpp/launcher-app`,
+  `C:\llama-cpp\launcher-app`, etc.).
+- Tests: `tests/test_migration_ui.py` (8 tests: detection, planning, fresh + existing
+  destination, merge semantics, idempotency, full app flow).
+
 ## Verified
 
-- Linux unit suite: 15 passed (10 baseline + 5 security tests) under Xvfb; 14 headless.
+- Linux unit suite: 23 passed under Xvfb; 22 headless (1 display-bound test).
 - Python source and tests compile on Linux.
 - Windows x64 Portable ZIP and per-user Setup EXE rebuilt after the cross-platform process-layer change; Windows test suite: 10 passed.
 - Rebuilt Windows artifact started successfully, served Tailscale HTTPS with HTTP 200, and adopted the live Vulkan llama-server PID 22092 without restart.
@@ -51,7 +64,8 @@ Llama Launcher must run natively on both Windows and Linux because the managed `
 - Validate a real native Linux `llama-server` start/stop/adopt cycle on a Linux GPU host.
 - Validate tray behavior in an actual GNOME/KDE desktop session; Xvfb has no tray manager.
 - Replace the hard-coded Windows VRAM preflight with optional host-policy configuration.
-- Complete safe legacy settings migration UI and profile export/import.
+- ~~Complete safe legacy settings migration UI~~ ✅ done (commit c4d034e).
+- Profile export/import (without local absolute paths).
 - Add Linux startup integration and decide whether AppImage/deb packaging is warranted.
 - Perform migration rehearsal before replacing the existing daily-use launcher.
 - Create GitHub repository and publish only after owner review.

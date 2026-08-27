@@ -47,7 +47,7 @@
 2. 真實 Linux GPU 主機驗證 `llama-server` start/stop/adopt（目前只有 Windows 驗過）。
 3. 真實 GNOME/KDE session 驗 tray（Xvfb 無 tray manager，不算數）。
 4. 模組細拆（audit 建議，不急於 v1.0）：`profiles.py`、`inventory.py`、`command.py`（argv builder）、`preflight.py`、`remote.py`（HTML 移出 py 檔）、`single_instance.py`；用 characterization tests 鎖定 CUDA/Vulkan argv。
-5. 設定遷移 UI：舊 `E:\llama-cpp\launcher-app` 的 models.json/settings/token → 新資料目錄（migration.py 已有核心邏輯）。
+5. ✅ 設定遷移 UI：`migration.py` 擴充（detect/plan/merge）+ `app.py` 自動偵測 + 按鈕。commit c4d034e。
 6. profile export/import（不帶本機絕對路徑）。
 7. 依主人決定：GitHub repo 公開/private + License（icon 來源授權也要確認）；主人驗收後才切換日常使用。
 
