@@ -1291,7 +1291,9 @@ class LauncherApp:
         dashboard = tk.PanedWindow(root, orient="horizontal", sashwidth=7,
                                    sashrelief="flat", bg="#0d1118",
                                    bd=0, relief="flat")
-        dashboard.pack(fill="both", expand=True, padx=12, pady=12)
+        # 四邊留白均勻：左右 dashboard padx 12 + 內容 padx 16 = 28；
+        # 底部也留 28，讓左下角按鈕不會貼邊。
+        dashboard.pack(fill="both", expand=True, padx=12, pady=(12, 28))
 
         left = tk.Frame(dashboard, bg="#171e2a", width=350,
                         highlightthickness=1, highlightbackground="#293244")
