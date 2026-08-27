@@ -1243,8 +1243,8 @@ class LauncherApp:
 
         # ---- Modern dark dashboard: favorites/control on the left, full-height log on the right.
         root.title("llama.cpp Launcher")
-        root.geometry("1180x860")
-        root.minsize(980, 720)
+        root.geometry("1180x820")
+        root.minsize(980, 700)
         root.configure(bg="#0d1118")
         self.window_icon = None
         try:
@@ -1304,14 +1304,15 @@ class LauncherApp:
                  fg="#9fb7d7", bg="#171e2a", anchor="w").pack(
                      fill="x", padx=16, pady=(16, 7))
         favorite_box = tk.Frame(left, bg="#171e2a")
-        favorite_box.pack(fill="x", padx=16)
+        favorite_box.pack(fill="both", expand=True, padx=16)
         self.listbox = tk.Listbox(
             favorite_box, font=("Segoe UI", 10), exportselection=False,
             height=7, bg="#101620", fg="#edf2f8", selectbackground="#326fd1",
             selectforeground="white", relief="flat", bd=0,
             highlightthickness=1, highlightbackground="#303b4e",
             activestyle="none")
-        self.listbox.pack(fill="x")
+        # expand：視窗變高時列表吃掉多餘空間，避免下方大片空白
+        self.listbox.pack(fill="both", expand=True)
         self.listbox.bind("<<ListboxSelect>>", self.on_select)
         self.refresh_listbox()
 
@@ -1900,7 +1901,8 @@ class LauncherApp:
                             ("VISION ON" if profile_vision_enabled(p) else "VISION OFF"))
             lines = [
                 p["name"],
-                f"Size: {size or '?'}   ·   {p.get('backend','cuda').upper()}   ·   {vision_state}",
+                f"Size: {size or '?'}   ·   {p.get('backend','cuda').upper()}",
+                vision_state,
                 f"Default context: {format_context_k(p.get('default_ctx', 131072))}K",
             ]
             self.detail_text.insert("end", "\n".join(lines))
