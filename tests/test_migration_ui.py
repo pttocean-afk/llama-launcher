@@ -186,3 +186,41 @@ def test_app_migration_flow(tmp_path, monkeypatch):
     # idempotent: running the merge again adds nothing
     assert app.merge_legacy_into_config(legacy, data_dir / "profiles.json") == 0
     assert len(app.load_config()["profiles"]) == 2
+
+
+def test_gpu_preset_remember_roundtrip(tmp_path, monkeypatch):
+    """自訂 GPU 分配存進全域常用清單，之後能讀回。"""
+    import llama_launcher.app as app
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    monkeypatch.setattr(app, "SETTINGS_PATH", data_dir / "settings.json")
+
+    assert app.gpu_preset_options() == []
+    app.remember_gpu_preset("16,8")
+    app.remember_gpu_preset("18,6")
+    app.remember_gpu_preset("16,8")  # 重複不加入
+    assert app.gpu_preset_options() == ["16,8", "18,6"]
+    app.remember_gpu_preset("")
+    assert app.gpu_preset_options() == ["16,8", "18,6"]
+    # 存進 settings.json
+    settings = app._load_settings()
+    assert settings["gpu_split_presets"] == ["16,8", "18,6"]
+
+
+def test_gpu_preset_forget(tmp_path, monkeypatch):
+    """自訂分配可被刪除，避免打錯的卡在清單。"""
+    import llama_launcher.app as app
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    monkeypatch.setattr(app, "SETTINGS_PATH", data_dir / "settings.json")
+
+    app.remember_gpu_preset("16,8")
+    app.remember_gpu_preset("18,6")
+    app.remember_gpu_preset("99,99")
+    assert app.gpu_preset_options() == ["16,8", "18,6", "99,99"]
+    app.forget_gpu_preset("99,99")
+    assert app.gpu_preset_options() == ["16,8", "18,6"]
+    app.forget_gpu_preset("not-there")  # 不存在也不崩
+    assert app.gpu_preset_options() == ["16,8", "18,6"]

@@ -1050,6 +1050,39 @@ def gpu_value_to_label(val: str) -> str:
     return val or "自動（讓程式決定）"
 
 
+def gpu_preset_options() -> list[str]:
+    """讀取全域「常用 GPU 分配」清單（settings.json 的 gpu_split_presets）。"""
+    try:
+        presets = _load_settings().get("gpu_split_presets") or []
+        return [str(v).strip() for v in presets if str(v).strip()]
+    except Exception:
+        return []
+
+
+def remember_gpu_preset(value: str) -> None:
+    """把一個自訂 GPU 分配存進全域常用清單（去重、保留順序）。"""
+    value = (value or "").strip()
+    if not value:
+        return
+    settings = _load_settings()
+    presets = [str(v).strip() for v in (settings.get("gpu_split_presets") or [])]
+    if value not in presets:
+        presets.append(value)
+        settings["gpu_split_presets"] = presets
+        _save_settings(settings)
+
+
+def forget_gpu_preset(value: str) -> None:
+    """從全域常用清單移除一個 GPU 分配（避免打錯的卡住）。"""
+    value = (value or "").strip()
+    settings = _load_settings()
+    presets = [str(v).strip() for v in (settings.get("gpu_split_presets") or [])]
+    if value in presets:
+        presets.remove(value)
+        settings["gpu_split_presets"] = presets
+        _save_settings(settings)
+
+
 class LogViewer(tk.Toplevel):
     """獨立 log 檢視視窗：讀取 log 檔尾部，自動更新。"""
 
@@ -1210,8 +1243,8 @@ class LauncherApp:
 
         # ---- Modern dark dashboard: favorites/control on the left, full-height log on the right.
         root.title("llama.cpp Launcher")
-        root.geometry("1180x760")
-        root.minsize(980, 640)
+        root.geometry("1180x860")
+        root.minsize(980, 720)
         root.configure(bg="#0d1118")
         self.window_icon = None
         try:
@@ -1774,14 +1807,9 @@ class LauncherApp:
             select_model = current.get("model") if current else None
         self.favorite_profiles = [p for p in self.profiles if p.get("starred")]
         self.listbox.delete(0, "end")
+        # 列表只顯示名稱（詳細資訊在右側 detail 面板看，避免被擠掉）
         for p in self.favorite_profiles:
-            if not p.get("mmproj"):
-                tag = "TEXT"
-            else:
-                tag = "VISION ON" if profile_vision_enabled(p) else "VISION OFF"
-            size = model_size_text(p.get("model", ""))
-            size_str = f"  [{size}]" if size else ""
-            self.listbox.insert("end", f"{p['name']}  ·  {tag}{size_str}")
+            self.listbox.insert("end", p["name"])
         if not self.favorite_profiles:
             self.listbox.insert("end", "No favorite models — open All models")
             self.listbox.itemconfig(0, fg="#7f8b9d")
@@ -1872,7 +1900,7 @@ class LauncherApp:
                             ("VISION ON" if profile_vision_enabled(p) else "VISION OFF"))
             lines = [
                 p["name"],
-                f"{size or '?'}  ·  {p.get('backend','cuda').upper()}  ·  {vision_state}",
+                f"Size: {size or '?'}   ·   {p.get('backend','cuda').upper()}   ·   {vision_state}",
                 f"Default context: {format_context_k(p.get('default_ctx', 131072))}K",
             ]
             self.detail_text.insert("end", "\n".join(lines))
@@ -2439,8 +2467,8 @@ class GlobalSettingsDialog(tk.Toplevel):
         super().__init__(parent)
         self.app = app
         self.title("設定（全域）")
-        self.geometry("560x560")
-        self.minsize(520, 500)
+        self.geometry("560x720")
+        self.minsize(520, 640)
         self.resizable(True, True)
         self.transient(parent)
         self.grab_set()
@@ -2512,6 +2540,25 @@ class GlobalSettingsDialog(tk.Toplevel):
                   activebackground="#34445f", activeforeground="white",
                   relief="flat", pady=7).pack(fill="x", pady=(6, 0))
 
+        # ---- 常用 GPU 分配
+        tk.Label(body, text="常用 GPU 分配", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        tk.Label(body, text="在個別模型設定自訂過的層數分配，之後可直接選。",
+                 font=("Segoe UI", 8), fg="#888").pack(anchor="w", pady=(1, 4))
+        preset_row = tk.Frame(body)
+        preset_row.pack(fill="x")
+        self.preset_list = tk.Listbox(preset_row, height=4,
+                                      font=("Consolas", 9),
+                                      exportselection=False)
+        self.preset_list.pack(side="left", fill="x", expand=True)
+        preset_btns = tk.Frame(preset_row)
+        preset_btns.pack(side="left", padx=(6, 0))
+        tk.Button(preset_btns, text="刪除選取",
+                  command=self._delete_preset, padx=8, pady=3).pack(fill="x")
+        tk.Button(preset_btns, text="清空",
+                  command=self._clear_presets, padx=8, pady=3).pack(fill="x", pady=(4, 0))
+        self._reload_presets()
+        tk.Frame(body, height=1, bg="#ddd").pack(fill="x", pady=12)
+
         btns = tk.Frame(self, padx=18, pady=12)
         btns.pack(fill="x")
         tk.Button(btns, text="儲存", command=self.save,
@@ -2522,6 +2569,24 @@ class GlobalSettingsDialog(tk.Toplevel):
         tk.Button(btns, text="取消", command=self.destroy,
                   font=("Segoe UI", 10), width=12,
                   padx=16, pady=7).pack(side="right", padx=(0, 10))
+
+    def _reload_presets(self):
+        self.preset_list.delete(0, "end")
+        for preset in gpu_preset_options():
+            self.preset_list.insert("end", preset)
+
+    def _delete_preset(self):
+        sel = self.preset_list.curselection()
+        if not sel:
+            return
+        value = self.preset_list.get(sel[0])
+        forget_gpu_preset(value)
+        self._reload_presets()
+
+    def _clear_presets(self):
+        for value in gpu_preset_options():
+            forget_gpu_preset(value)
+        self._reload_presets()
 
     def save(self):
         new_dir = self.dir_var.get().strip()
@@ -2699,6 +2764,10 @@ class SettingsDialog(tk.Toplevel):
                  anchor="w").pack(fill="x", pady=(8, 2))
         gpu_values = [o[0] for o in GPU_OPTIONS]
         current_gpu = gpu_value_to_label(profile.get("gpu_split", ""))
+        # 常用分配（使用者自訂過、存進全域清單的）排在中間
+        for preset in gpu_preset_options():
+            if preset not in gpu_values:
+                gpu_values.append(preset)
         if current_gpu not in gpu_values and current_gpu:
             gpu_values.append(current_gpu)
         self.gpu_var = tk.StringVar(value=current_gpu)
@@ -2715,7 +2784,8 @@ class SettingsDialog(tk.Toplevel):
             value = simpledialog.askstring(
                 "自訂顯示卡分配",
                 "請輸入各 GPU 的層數，逗號分隔（例：16,8 = GPU0 16 層、GPU1 8 層）。\n"
-                "留空 = 自動。",
+                "留空 = 自動。\n\n"
+                "儲存後會加入「常用分配」清單，之後可直接選。",
                 initialvalue=self.gpu_custom_var.get() or "16,8",
                 parent=self)
             if value is None:
@@ -2830,6 +2900,8 @@ class SettingsDialog(tk.Toplevel):
             p["gpu_split"] = gpu_label[3:].strip()
         else:
             p["gpu_split"] = gpu_label_to_value(gpu_label)
+        # 自訂分配加入全域常用清單，之後每個模型的設定都能直接選
+        remember_gpu_preset(p["gpu_split"])
         p["backend"] = self.backend_var.get().lower()
         p["mtp"] = self.mtp_var.get() == "On"
         p["jinja"] = self.jinja_var.get()
