@@ -48,7 +48,7 @@
 3. 真實 GNOME/KDE session 驗 tray（Xvfb 無 tray manager，不算數）。
 4. 模組細拆（audit 建議，不急於 v1.0）：`profiles.py`、`inventory.py`、`command.py`（argv builder）、`preflight.py`、`remote.py`（HTML 移出 py 檔）、`single_instance.py`；用 characterization tests 鎖定 CUDA/Vulkan argv。
 5. ✅ 設定遷移 UI：`migration.py` 擴充（detect/plan/merge）+ `app.py` 自動偵測 + 按鈕。commit c4d034e。
-6. profile export/import（不帶本機絕對路徑）。
+6. ✅ profile export/import：`profiles.py`（export/read/merge，路徑欄位自動剝除）+ ModelLibrary 的 Export/Import 按鈕。commit 8f3b991。
 7. 依主人決定：GitHub repo 公開/private + License（icon 來源授權也要確認）；主人驗收後才切換日常使用。
 
 ## 六、硬性規則

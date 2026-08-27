@@ -69,7 +69,7 @@ Llama Launcher must run natively on both Windows and Linux because the managed `
 - Validate tray behavior in an actual GNOME/KDE desktop session; Xvfb has no tray manager.
 - Replace the hard-coded Windows VRAM preflight with optional host-policy configuration.
 - ~~Complete safe legacy settings migration UI~~ ✅ done (commit c4d034e).
-- Profile export/import (without local absolute paths).
+- ~~Profile export/import (without local absolute paths)~~ ✅ done (commit 8f3b991).
 - Add Linux startup integration and decide whether AppImage/deb packaging is warranted.
 - Perform migration rehearsal before replacing the existing daily-use launcher.
 - Create GitHub repository and publish only after owner review.
