@@ -58,6 +58,10 @@ Llama Launcher must run natively on both Windows and Linux because the managed `
 - Linux artifact rebuilt after the security fixes: starts under Xvfb, dashboard HTTP 200,
   `/api/status` reports `control.ok: true`, unauthenticated `/api/status` returns 401,
   and the served page uses the DOM-based profile renderer (no `innerHTML` profile data).
+- Windows Portable ZIP rebuilt via WSL→Windows Python 3.14 + PyInstaller 6.18
+  (repo copied to `E:\llama-launcher-build`, build output copied back to `dist/`).
+  `LlamaLauncher-Setup-x64.exe` (Inno Setup) not rebuilt — Inno Setup not found on
+  this machine; the existing EXE is from the pre-security-fix build.
 
 ## Remaining before v1.0
 

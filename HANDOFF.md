@@ -39,7 +39,7 @@
 3. ~~**ControlServer bind 失敗靜默**~~ ✅ 寫 `llama_launcher` logger warning + `/api/status` 回 `control.ok`/`control.error` + 啟動時彈出警告 dialog。
 
 驗證：15 passed（Xvfb 下；headless 14，bind 測試需 display）、compileall OK、Linux artifact 重建並真機 Xvfb 驗證（dashboard 200、`/api/status` token 401/200、新 HTML 生效）。
-**注意：Windows artifact 尚未用本次改動重建**（本環境無法產出/執行 .exe）——下次在 Windows 上跑 `scripts/build-windows.ps1` 重建並驗證。
+**Windows artifact 已重建（Portable ZIP）**：透過 WSL 呼叫 `C:\Users\pttoc\AppData\Local\Python\bin\python.exe`（3.14.2 + PyInstaller 6.18），repo 拷到 `E:\llama-launcher-build` build 後拷回 `dist/`。`LlamaLauncher-Setup-x64.exe`（Inno Setup）未重建——這台機器找不到 ISCC.exe，需在 Windows 上跑 `scripts/build-installer.ps1`。
 
 ## 五、v1.0 前剩餘工作（依序）
 
