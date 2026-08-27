@@ -56,7 +56,7 @@
 
 ### Windows
 
-1. 到本專案的 [Releases](https://github.com/your-user/llama-launcher/releases)（把 `your-user` 換成你的 GitHub 帳號）下載 `LlamaLauncher-Setup-x64.exe` 安裝，或解壓 `LlamaLauncher-Portable-x64.zip`
+1. 到本專案的 [Releases](https://github.com/pttocean-afk/llama-launcher/releases)下載 `LlamaLauncher-Setup-x64.exe` 安裝，或解壓 `LlamaLauncher-Portable-x64.zip`
 2. 啟動後選擇**包含 `llama-server.exe` 的資料夾**
 3. 把 GGUF 模型放進它的 `models` 子資料夾
 4. 選好模型 → 按 **START SERVER**
@@ -64,7 +64,7 @@
 ### Linux (x86_64)
 
 ```bash
-wget -c https://github.com/your-user/llama-launcher/releases/latest/download/LlamaLauncher-Linux-x86_64.tar.gz  # 把 your-user 換成你的帳號
+wget -c https://github.com/pttocean-afk/llama-launcher/releases/latest/download/LlamaLauncher-Linux-x86_64.tar.gz  # 把 your-user 換成你的帳號
 tar -xzf LlamaLauncher-Linux-x86_64.tar.gz
 ./LlamaLauncher/LlamaLauncher
 ```
@@ -203,14 +203,14 @@ GPU split, and remote access are a pain. **Llama Launcher** wraps it all up:
 ## Quick start
 
 **Windows:** grab `LlamaLauncher-Setup-x64.exe` or `LlamaLauncher-Portable-x64.zip`
-from [Releases](https://github.com/your-user/llama-launcher/releases). Pick the
+from [Releases](https://github.com/pttocean-afk/llama-launcher/releases). Pick the
 folder containing `llama-server.exe`, drop GGUFs into its `models` subfolder,
 select a model, press **START SERVER**.
 
 **Linux (x86_64):**
 
 ```bash
-wget -c https://github.com/your-user/llama-launcher/releases/latest/download/LlamaLauncher-Linux-x86_64.tar.gz
+wget -c https://github.com/pttocean-afk/llama-launcher/releases/latest/download/LlamaLauncher-Linux-x86_64.tar.gz
 tar -xzf LlamaLauncher-Linux-x86_64.tar.gz
 ./LlamaLauncher/LlamaLauncher
 ```
