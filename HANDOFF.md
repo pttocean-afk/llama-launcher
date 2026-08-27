@@ -30,17 +30,20 @@
 | **Linux 打包鐵則** | 必須用 distro system Python（`python3 -m venv` + `python3-tk`）；用 Hermes bundled Python 打包會缺 `libtcl9.0.so` 直接失敗 |
 | 產物位置 | `dist/LlamaLauncher-Setup-x64.exe`、`dist/LlamaLauncher-Portable-x64.zip`、`dist/LlamaLauncher-Linux-x86_64.tar.gz`（已被 .gitignore 排除，不入 git） |
 
-## 四、接手後第一優先（audit 已確認的安全問題，尚未動手）
+## 四、接手後第一優先（已完成 2026-08-27 by DSH，commit 見下）
 
 來源：`/home/pttocean/.hermes/profiles/lucy/cache/delegation/subagent-summary-0-20260827_085305_350664.txt`
 
-1. **遠端 dashboard XSS**（app.py ~line 898）：`$('profiles').innerHTML=` 直接插入 profile name/model。須改為 DOM 建構（`createElement`/`textContent`）或完整 JS 跳脫，model 參數不可用 `replaceAll` 塞進 onclick。加測試。
-2. **start/stop 無 operation lock**：遠端 HTTP thread 與 Tk 主執行緒可同時啟停同一個 ServerManager。加 `threading.Lock`，remote_start/remote_stop/on_launch/on_stop 共用。
-3. ControlServer bind 失敗目前被 `except OSError` 靜默吞掉（app.py ~1174-1178）→ 至少寫 log/狀態。
+1. ~~**遠端 dashboard XSS**~~ ✅ 已改 DOM 建構（`renderProfiles`：`createElement`/`textContent`/`addEventListener`，model 只走 `POST /api/start` JSON body）。
+2. ~~**start/stop 無 operation lock**~~ ✅ `LauncherApp.server_lock`（`threading.Lock`）：`remote_start`/`remote_stop`/`on_launch`/`on_stop`、degraded 自動停止、quit 停止全部共用。
+3. ~~**ControlServer bind 失敗靜默**~~ ✅ 寫 `llama_launcher` logger warning + `/api/status` 回 `control.ok`/`control.error` + 啟動時彈出警告 dialog。
+
+驗證：15 passed（Xvfb 下；headless 14，bind 測試需 display）、compileall OK、Linux artifact 重建並真機 Xvfb 驗證（dashboard 200、`/api/status` token 401/200、新 HTML 生效）。
+**注意：Windows artifact 尚未用本次改動重建**（本環境無法產出/執行 .exe）——下次在 Windows 上跑 `scripts/build-windows.ps1` 重建並驗證。
 
 ## 五、v1.0 前剩餘工作（依序）
 
-1. 上述 3 個安全修復 + 測試 + 重建兩平台 artifact 重驗。
+1. ✅ 3 個安全修復 + 測試（已完成；Linux artifact 已重驗，**Windows artifact 待重建**）。
 2. 真實 Linux GPU 主機驗證 `llama-server` start/stop/adopt（目前只有 Windows 驗過）。
 3. 真實 GNOME/KDE session 驗 tray（Xvfb 無 tray manager，不算數）。
 4. 模組細拆（audit 建議，不急於 v1.0）：`profiles.py`、`inventory.py`、`command.py`（argv builder）、`preflight.py`、`remote.py`（HTML 移出 py 檔）、`single_instance.py`；用 characterization tests 鎖定 CUDA/Vulkan argv。

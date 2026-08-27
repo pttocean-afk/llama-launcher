@@ -8,6 +8,7 @@ host user-data directory. llama.cpp runtimes and GGUF models remain external
 and are selected during first-run setup.
 """
 import json
+import logging
 import os
 import re
 import socket
@@ -895,7 +896,8 @@ const $=id=>document.getElementById(id);const saved=localStorage.getItem('llamaT
 function saveToken(){localStorage.setItem('llamaToken',$('token').value.trim());status()}
 async function call(path,method='GET',body){const token=$('token').value.trim();if(!token)throw Error('Please enter the control token');localStorage.setItem('llamaToken',token);const r=await fetch(path,{method,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});const text=await r.text();let d;try{d=JSON.parse(text)}catch{d={error:text}}if(!r.ok)throw Error(d.error||('HTTP '+r.status));return d}
 function renderStatus(s){$('badge').textContent=s.running?'Running':'Stopped';$('badge').className='badge '+(s.running?'on':'');$('model').textContent=s.profile||'—';$('backend').textContent=s.backend||'—';$('pid').textContent=s.pid||'—';$('uptime').textContent=s.uptime||'—';$('stopBtn').disabled=!s.running}
-async function status(){try{const [s,p]=await Promise.all([call('/api/status'),call('/api/profiles')]);renderStatus(s);$('profiles').innerHTML=p.profiles.map(x=>`<div class=profile><div><b>${x.name}</b><small>${x.backend.toUpperCase()} · ${(x.default_ctx/1024).toFixed(0)}K context · reasoning ${x.reasoning}</small></div><button onclick="start('${x.model.replaceAll("'","\\'")}')" ${s.running?'disabled':''}>Start</button></div>`).join('')||'<div style="color:#8fa3bf">No profiles found.</div>';if(s.degraded)$('message').textContent='Warning: '+s.degraded}catch(e){$('message').textContent='Error: '+e.message}}
+function renderProfiles(list,running){const box=$('profiles');box.textContent='';if(!list.length){const none=document.createElement('div');none.style.color='#8fa3bf';none.textContent='No profiles found.';box.appendChild(none);return}for(const x of list){const row=document.createElement('div');row.className='profile';const info=document.createElement('div');const name=document.createElement('b');name.textContent=x.name;info.appendChild(name);const detail=document.createElement('small');detail.textContent=String(x.backend||'').toUpperCase()+' · '+((Number(x.default_ctx)||0)/1024).toFixed(0)+'K context · reasoning '+(x.reasoning||'');info.appendChild(detail);row.appendChild(info);const btn=document.createElement('button');btn.textContent='Start';if(!running){btn.addEventListener('click',()=>start(String(x.model||'')))}else{btn.disabled=true}row.appendChild(btn);box.appendChild(row)}}
+async function status(){try{const [s,p]=await Promise.all([call('/api/status'),call('/api/profiles')]);renderStatus(s);renderProfiles(p.profiles||[],s.running);if(s.degraded)$('message').textContent='Warning: '+s.degraded}catch(e){$('message').textContent='Error: '+e.message}}
 async function start(model){try{$('message').textContent='Starting...';await call('/api/start','POST',{model});await status();$('message').textContent='Started'}catch(e){$('message').textContent='Error: '+e.message}}
 async function stop(){if(!confirm('Stop the current llama-server?'))return;try{$('message').textContent='Stopping...';await call('/api/stop','POST');await status();$('message').textContent='Stopped'}catch(e){$('message').textContent='Error: '+e.message}}
 async function logs(){try{const d=await call('/api/logs');$('log').textContent=d.tail||'(No log available)'}catch(e){$('log').textContent='Error: '+e.message}}
@@ -913,6 +915,7 @@ class ControlServer:
         self.app = app
         self.token = _get_control_token()
         self.bind_host = "127.0.0.1"
+        self.bound = False
         parent = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -996,6 +999,7 @@ class ControlServer:
                     self._send(500, {"error": f"Control request failed: {exc}"})
 
         self.httpd = ThreadingHTTPServer((self.bind_host, CONTROL_PORT), Handler)
+        self.bound = True
         self.thread = threading.Thread(target=self.httpd.serve_forever,
                                        name="llama-control-api", daemon=True)
 
@@ -1170,12 +1174,20 @@ class LauncherApp:
         self.quitting = False
         self.server = ServerManager()
         self.server.adopt_existing_server()
+        # Tk 主執行緒與 remote HTTP thread 共用，避免同時 start/stop 同一個 server。
+        self.server_lock = threading.Lock()
         self.control_server = None
+        self.control_error = ""
         try:
             self.control_server = ControlServer(self)
             self.control_server.start()
-        except OSError:
+        except OSError as exc:
             self.control_server = None
+            self.control_error = (
+                f"Control API 無法監聽 {CONTROL_PORT}（{exc}）。"
+                "Remote dashboard 將不可用。")
+            logging.getLogger("llama_launcher").warning(
+                "Control API bind failed on %s: %s", CONTROL_PORT, exc)
         self.log_viewer: LogViewer | None = None
 
         # ---- Modern dark dashboard: favorites/control on the left, full-height log on the right.
@@ -1193,6 +1205,12 @@ class LauncherApp:
         except tk.TclError:
             pass
         root.protocol("WM_DELETE_WINDOW", self.hide_to_tray)
+        if self.control_error:
+            messagebox.showwarning(
+                "Remote control unavailable",
+                f"{self.control_error}\n\n"
+                f"Control API 需要 {CONTROL_PORT} 不被其他程式佔用。",
+            )
 
         style = ttk.Style(root)
         try:
@@ -1495,7 +1513,9 @@ class LauncherApp:
             "degraded": self.server.degraded_reason or None,
             "log": str(self.server.log_path) if self.server.log_path else None,
             "control": {"host": self.control_server.bind_host if self.control_server else None,
-                        "port": CONTROL_PORT},
+                        "port": CONTROL_PORT,
+                        "ok": bool(self.control_server is not None and self.control_server.bound),
+                        "error": self.control_error or None},
         }
 
     def remote_profiles(self) -> list[dict]:
@@ -1524,15 +1544,17 @@ class LauncherApp:
         profile = next((p for p in self.profiles if p.get("model") == model), None)
         if profile is None:
             return {"ok": False, "error": "profile is not in models.json"}
-        if self.server.running:
-            return {"ok": False, "error": "llama-server is already running",
-                    "status": self.remote_status()}
-        ctx = format_context_k(profile.get("default_ctx", 131072))
-        ok, message = self.server.start(dict(profile), ctx)
+        with self.server_lock:
+            if self.server.running:
+                return {"ok": False, "error": "llama-server is already running",
+                        "status": self.remote_status()}
+            ctx = format_context_k(profile.get("default_ctx", 131072))
+            ok, message = self.server.start(dict(profile), ctx)
         return {"ok": ok, "message": message, "status": self.remote_status()}
 
     def remote_stop(self) -> dict:
-        message = self.server.stop()
+        with self.server_lock:
+            message = self.server.stop()
         return {"ok": not self.server.running, "message": message,
                 "status": self.remote_status()}
 
@@ -1694,7 +1716,8 @@ class LauncherApp:
         save_config(self.cfg)
         self.profiles = merge_profiles(self.cfg)
 
-        ok, msg = self.server.start(p, self.ctx_var.get())
+        with self.server_lock:
+            ok, msg = self.server.start(p, self.ctx_var.get())
         if not ok:
             messagebox.showerror("啟動失敗", msg)
             return
@@ -1710,7 +1733,8 @@ class LauncherApp:
             self.on_launch()
 
     def on_stop(self):
-        self.server.stop()
+        with self.server_lock:
+            self.server.stop()
         self._update_server_ui()
 
     def open_log(self):
@@ -1884,7 +1908,8 @@ class LauncherApp:
         if self.server.degraded_reason and not self.server.degraded_warning_shown:
             self.server.degraded_warning_shown = True
             reason = self.server.degraded_reason
-            stop_message = self.server.stop()
+            with self.server_lock:
+                stop_message = self.server.stop()
             messagebox.showwarning(
                 "llama-server 慢速模式（已自動停止）",
                 f"{reason}\n\n"
@@ -2015,7 +2040,8 @@ class LauncherApp:
                     "（選「否」則 llama-server 會繼續在背景跑，log 仍會寫入）"):
                 pass  # 讓 server 繼續跑
             else:
-                self.server.stop()
+                with self.server_lock:
+                    self.server.stop()
         self.quitting = True
         if self.control_server is not None:
             try:

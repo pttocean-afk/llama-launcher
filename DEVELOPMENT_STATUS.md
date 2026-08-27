@@ -19,14 +19,32 @@ Llama Launcher must run natively on both Windows and Linux because the managed `
 - Added Linux x86_64 portable tar.gz build and desktop entry.
 - Added Windows and Linux GitHub Actions build/release workflows.
 
+## Security fixes (2026-08-27, DSH)
+
+- Remote dashboard XSS fixed: profile rows are now built with `createElement`/`textContent`
+  and `addEventListener` (no `innerHTML` interpolation, no model path in `onclick`).
+- Added a shared `threading.Lock` around all start/stop operations: Tk `on_launch`/`on_stop`,
+  degraded auto-stop, quit-time stop, and remote `remote_start`/`remote_stop` all serialize
+  on the same lock, so the HTTP thread and the Tk thread can no longer start/stop the
+  managed server concurrently.
+- Control API bind failure is no longer silent: the bind error is logged to the
+  `llama_launcher` logger, exposed in `/api/status` as `control.ok`/`control.error`,
+  and shown in a startup warning dialog.
+- New test suite `tests/test_app_security.py`: DOM-render assertions, lock behavior of
+  remote start/stop, bind-failure observability (requires a display; run under xvfb-run),
+  and a real HTTP round-trip through `ControlServer` (auth 401 + token + profile start).
+
 ## Verified
 
-- Linux unit suite: 10 passed.
+- Linux unit suite: 15 passed (10 baseline + 5 security tests) under Xvfb; 14 headless.
 - Python source and tests compile on Linux.
 - Windows x64 Portable ZIP and per-user Setup EXE rebuilt after the cross-platform process-layer change; Windows test suite: 10 passed.
 - Rebuilt Windows artifact started successfully, served Tailscale HTTPS with HTTP 200, and adopted the live Vulkan llama-server PID 22092 without restart.
 - Linux system-Python artifact starts under Xvfb and serves the dashboard with HTTP 200.
 - First Linux build made with Hermes Python failed due missing `libtcl9.0.so`; build procedure was corrected to distribution system Python plus `python3-tk`.
+- Linux artifact rebuilt after the security fixes: starts under Xvfb, dashboard HTTP 200,
+  `/api/status` reports `control.ok: true`, unauthenticated `/api/status` returns 401,
+  and the served page uses the DOM-based profile renderer (no `innerHTML` profile data).
 
 ## Remaining before v1.0
 
