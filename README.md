@@ -42,7 +42,9 @@
 
 ## 📸 畫面
 
-*(等待補上螢幕截圖 — screenshot.png)*
+> 〔截圖待補〕把主畫面截圖存成 `docs/screenshot.png` 即可顯示：
+
+![LlamaLauncher 主畫面](docs/screenshot.png)
 
 ---
 
@@ -50,7 +52,7 @@
 
 ### Windows
 
-1. 下載 [LlamaLauncher-Setup-x64.exe](https://github.com/<your-user>/llama-launcher/releases/latest) 安裝，或解壓 `LlamaLauncher-Portable-x64.zip`
+1. 到本專案的 [Releases](https://github.com/your-user/llama-launcher/releases)（把 `your-user` 換成你的 GitHub 帳號）下載 `LlamaLauncher-Setup-x64.exe` 安裝，或解壓 `LlamaLauncher-Portable-x64.zip`
 2. 啟動後選擇**包含 `llama-server.exe` 的資料夾**
 3. 把 GGUF 模型放進它的 `models` 子資料夾
 4. 選好模型 → 按 **START SERVER**
@@ -58,7 +60,7 @@
 ### Linux (x86_64)
 
 ```bash
-wget -c https://github.com/<your-user>/llama-launcher/releases/latest/download/LlamaLauncher-Linux-x86_64.tar.gz
+wget -c https://github.com/your-user/llama-launcher/releases/latest/download/LlamaLauncher-Linux-x86_64.tar.gz  # 把 your-user 換成你的帳號
 tar -xzf LlamaLauncher-Linux-x86_64.tar.gz
 ./LlamaLauncher/LlamaLauncher
 ```
