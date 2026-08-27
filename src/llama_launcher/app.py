@@ -1553,6 +1553,60 @@ class LauncherApp:
         self.update_detail()
         return result
 
+    # ---------------- profile export / import
+    def export_profiles(self, profiles: list[dict] | None = None) -> Path | None:
+        """Save profiles to a JSON file. Returns the path, or None if cancelled."""
+        if profiles is None:
+            profiles = self.profiles
+        if not profiles:
+            messagebox.showinfo("Export", "No profiles to export.")
+            return None
+        from .profiles import export_profiles
+        payload = export_profiles(profiles)
+        default_name = "llama-launcher-profiles.json"
+        path = filedialog.asksaveasfilename(
+            title="Export profiles",
+            defaultextension=".json",
+            initialfile=default_name,
+            filetypes=[("JSON", "*.json")],
+        )
+        if not path:
+            return None
+        Path(path).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        messagebox.showinfo(
+            "Export complete",
+            f"{len(profiles)} profile(s) saved to\n{path}")
+        return Path(path)
+
+    def import_profiles(self) -> None:
+        """Load profiles from a JSON export file and merge them in."""
+        from .profiles import read_export, merge_imported
+        path = filedialog.askopenfilename(
+            title="Import profiles",
+            filetypes=[("JSON", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            imported = read_export(Path(path))
+        except (ValueError, json.JSONDecodeError, OSError) as exc:
+            messagebox.showerror("Import failed", f"Cannot read profile file:\n{exc}")
+            return
+        if not imported:
+            messagebox.showinfo("Import", "No valid profiles found in file.")
+            return
+        current = list(self.cfg.get("profiles", []))
+        merged, added, updated = merge_imported(current, imported)
+        self.cfg["profiles"] = merged
+        save_config(self.cfg)
+        self.profiles = merge_profiles(self.cfg)
+        self._normalize_favorite_orders()
+        self.refresh_listbox()
+        self.update_detail()
+        msg = f"Imported {added} new, updated {updated} existing."
+        messagebox.showinfo("Import complete", msg)
+
     def on_remote_access(self):
         manager = TailscaleManager()
         if manager.executable is None:
@@ -2249,6 +2303,8 @@ class ModelLibraryDialog(tk.Toplevel):
             ("Settings", self.settings, "#273246"),
             ("Delete", self.delete, "#8f3f48"),
             ("Rescan", self.rescan, "#273246"),
+            ("Export", self._export, "#273246"),
+            ("Import", self._import, "#273246"),
         ):
             tk.Button(actions, text=text, command=command,
                       font=("Segoe UI", 9, "bold"), bg=color, fg="white",
@@ -2329,6 +2385,17 @@ class ModelLibraryDialog(tk.Toplevel):
 
     def rescan(self):
         self.app.on_rescan()
+        self.refresh()
+
+    def _export(self):
+        """Export the currently selected profile, or all if none selected."""
+        p = self.current()
+        profiles = [p] if p else self.app.profiles
+        self.app.export_profiles(profiles)
+        self.refresh()
+
+    def _import(self):
+        self.app.import_profiles()
         self.refresh()
 
 
