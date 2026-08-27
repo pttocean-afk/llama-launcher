@@ -41,6 +41,12 @@
 驗證：15 passed（Xvfb 下；headless 14，bind 測試需 display）、compileall OK、Linux artifact 重建並真機 Xvfb 驗證（dashboard 200、`/api/status` token 401/200、新 HTML 生效）。
 **Windows artifact 已重建（Portable ZIP）**：透過 WSL 呼叫 `C:\Users\pttoc\AppData\Local\Python\bin\python.exe`（3.14.2 + PyInstaller 6.18），repo 拷到 `E:\llama-launcher-build` build 後拷回 `dist/`。`LlamaLauncher-Setup-x64.exe`（Inno Setup）未重建——這台機器找不到 ISCC.exe，需在 Windows 上跑 `scripts/build-installer.ps1`。
 
+### Windows UI 卡頓修復（主人 2026-08-27 回報，已解決）
+
+- **元兇**：`SetProcessDpiAwareness(2)`（per-monitor v2）+ Tk 8.6 —— Tk 只在啟動時讀一次 DPI，窗口移動時 Windows 被迫強制縮放 Tk 輸出，拖動/點擊卡頓。
+- **修法**（commit `ce6bef2`）：改 `SetProcessDPIAware()`（system-DPI-aware），Tk 自己用 `tk scaling` 處理；另將 idle 輪詢降到 5s、embedded log 輪詢 2s、port 探測超時 0.3s。
+- **主人驗證：不卡了 ✅**（Windows Portable ZIP 20:02 版本）。
+
 ## 五、v1.0 前剩餘工作（依序）
 
 1. ✅ 3 個安全修復 + 測試（已完成；Linux artifact 已重驗，**Windows artifact 待重建**）。
