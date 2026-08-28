@@ -76,6 +76,14 @@ def _make_app(app_mod):
     return app
 
 
+def test_cuda_and_vulkan_always_require_vram_preflight(app_mod):
+    assert app_mod.backend_requires_vram_preflight("cuda")
+    assert app_mod.backend_requires_vram_preflight("CUDA")
+    assert app_mod.backend_requires_vram_preflight("vulkan")
+    assert not app_mod.backend_requires_vram_preflight("cpu")
+    assert "EdgeGameAssist.exe" in app_mod.VRAM_CLEANUP_PROCESS_NAMES
+
+
 def test_remote_start_and_stop_take_lock_and_report(app_mod):
     app = _make_app(app_mod)
     start = app.remote_start({"model": "a.gguf"})

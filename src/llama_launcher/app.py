@@ -134,7 +134,7 @@ def update_llama_dir(new_dir: str) -> bool:
     return True
 
 
-# Vulkan 224K 以上啟動前的安全 VRAM 預檢。
+# CUDA / Vulkan 每次啟動前的 Windows VRAM 預檢與清理。
 NVIDIA_SMI = nvidia_smi_path()
 VRAM_PREFLIGHT_GPU0_LIMIT_MB = 2304
 VRAM_PREFLIGHT_GPU1_LIMIT_MB = 128
@@ -253,7 +253,7 @@ def _is_mmproj(name: str) -> bool:
     return "mmproj" in name.lower()
 
 def scan_gguf_files() -> list[str]:
-    """掃描 models\ 下的 .gguf，排除 mmproj。"""
+    """掃描 models 目錄下的 .gguf，排除 mmproj。"""
     models, _mmprojs, _sizes = _model_inventory()
     return list(models)
 
@@ -486,6 +486,11 @@ def port_in_use(port: int) -> bool:
 
 
 # ---------------------------------------------------------------- ServerManager
+def backend_requires_vram_preflight(backend: str) -> bool:
+    """CUDA and Vulkan both clean VRAM before every server start."""
+    return str(backend).strip().lower() in {"cuda", "vulkan"}
+
+
 class ServerManager:
     """管理 llama-server 背景 process：無視窗啟動、log 導流、狀態查詢。"""
 
@@ -669,12 +674,12 @@ class ServerManager:
                 pass
 
     def run_vram_preflight(self) -> tuple[bool, str]:
-        """Apply the current host-specific high-context Vulkan safety policy."""
+        """Apply the host-specific VRAM cleanup policy before every GPU start."""
         if not IS_WINDOWS:
             return True, "VRAM preflight skipped: no Linux host cleanup policy configured"
         before = self.query_gpu_memory_mb()
         if before is None:
-            return False, "無法讀取兩張 NVIDIA GPU 的 VRAM，已取消 Vulkan 224K+ 啟動"
+            return False, "無法讀取兩張 NVIDIA GPU 的 VRAM，已取消伺服器啟動"
 
         comfy_ok, comfy_status = self._stop_comfyui_if_active()
         if not comfy_ok:
@@ -695,7 +700,7 @@ class ServerManager:
                 owners = self.query_gpu1_processes()
                 owners_text = ("\nGPU1 process：" + ", ".join(owners)) if owners else ""
                 return False, (
-                    "VRAM 尚未回到安全基線，已取消 Vulkan 224K+ 啟動。\n"
+                    "VRAM 尚未回到安全基線，已取消伺服器啟動。\n"
                     f"GPU0：{after[0]} MB（需 ≤ {VRAM_PREFLIGHT_GPU0_LIMIT_MB}）\n"
                     f"GPU1：{after[1]} MB（需 ≤ {VRAM_PREFLIGHT_GPU1_LIMIT_MB}）"
                     f"{owners_text}\n"
@@ -735,8 +740,9 @@ class ServerManager:
             mmproj_path = LLAMA_DIR / Path("models") / profile["mmproj"]
             if not mmproj_path.exists():
                 return False, f"找不到視覺模型檔：models\\{profile['mmproj']}"
+        # CUDA / Vulkan 每次啟動都先清理 VRAM；不再限制 224K+ context。
         self.preflight_summary = "not required"
-        if backend == "vulkan" and ctx >= 229376:
+        if backend_requires_vram_preflight(backend):
             preflight_ok, preflight_msg = self.run_vram_preflight()
             if not preflight_ok:
                 return False, preflight_msg
