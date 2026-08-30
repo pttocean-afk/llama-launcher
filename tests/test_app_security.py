@@ -154,6 +154,14 @@ def test_dashboard_html_builds_profiles_with_dom(app_mod):
     assert "addEventListener('click'" in html
 
 
+def test_dashboard_html_prevents_mobile_text_overflow(app_mod):
+    html = app_mod.REMOTE_CONTROL_HTML
+    assert "repeat(2,minmax(0,1fr))" in html
+    assert ".grid>div,.profile>div{min-width:0}" in html
+    assert ".profile b,.profile small{overflow-wrap:anywhere}" in html
+    assert "html,body{max-width:100%;overflow-x:hidden}" in html
+
+
 def test_end_to_end_control_api_over_http(app_mod):
     """Real ControlServer over HTTP: token auth + DOM-safe profile rendering."""
     app = _make_app(app_mod)
@@ -189,30 +197,4 @@ def test_end_to_end_control_api_over_http(app_mod):
         server.close()
 
 
-# ---------------------------------------------------------------- UI 卡頓防護
-def test_scan_runtime_health_short_circuits_without_io(tmp_path, monkeypatch):
-    """log 沒新增時 scan_runtime_health 不開檔（每秒輪詢不拖 UI）。"""
-    import llama_launcher.app as app
 
-    log = tmp_path / "server.log"
-    log.write_bytes(b"hello world\n")
-    manager = app.ServerManager.__new__(app.ServerManager)
-    manager.log_path = log
-    manager._health_scan_offset = 0
-    manager._health_scan_size = -1
-    manager.degraded_reason = ""
-    manager.scan_runtime_health()
-    assert manager._health_scan_size == log.stat().st_size
-    assert manager._health_scan_offset == log.stat().st_size
-
-    # 第二次：size 沒變 → 不開檔（用假的 open 驗證不會被呼叫）
-    calls = {"open": 0}
-
-    def fake_open(*_a, **_k):
-        calls["open"] += 1
-        raise AssertionError("should not open file")
-
-    import builtins
-    monkeypatch.setattr(builtins, "open", fake_open)
-    manager.scan_runtime_health()
-    assert calls["open"] == 0

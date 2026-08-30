@@ -822,32 +822,6 @@ class ServerManager:
         self._health_scan_size = -1
         return True, f"已啟動 {self.profile_name} (PID {self.proc.pid})"
 
-    def scan_runtime_health(self):
-        """從新增 log 內容偵測會讓雙 GPU 推論大幅掉速的 runtime fallback。
-
-        先 stat 比對大小，log 沒新增就不開檔（每秒輪詢時避免磁碟 IO）。"""
-        p = self.log_path
-        if p is None or not p.exists():
-            return
-        try:
-            size = p.stat().st_size
-            if size == self._health_scan_size and self._health_scan_offset > 0:
-                return
-            if self._health_scan_offset > size:
-                self._health_scan_offset = 0
-            with open(p, "rb") as fh:
-                fh.seek(self._health_scan_offset)
-                chunk = fh.read(size - self._health_scan_offset)
-                self._health_scan_offset = fh.tell()
-                self._health_scan_size = size
-            text = chunk.decode("utf-8", errors="replace")
-            if "retrying without pipeline parallelism" in text:
-                self.degraded_reason = (
-                    "Vulkan compute buffer 配置失敗，已退回無 pipeline parallelism 慢速模式"
-                )
-        except OSError:
-            pass
-
     def stop(self) -> str:
         """停止launcher啟動或重開tray後接管的llama-server。"""
         if not self.running:
@@ -906,7 +880,7 @@ class ServerManager:
 # ---------------------------------------------------------------- Remote control API
 REMOTE_CONTROL_HTML = """<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>
 <title>llama.cpp Launcher Control</title><style>
-:root{color-scheme:dark}*{box-sizing:border-box}body{font:15px system-ui,-apple-system,sans-serif;background:#0b1220;color:#e8eef7;max-width:980px;margin:0 auto;padding:24px 16px}h1{margin:0;font-size:25px}h2{font-size:16px;margin:0 0 14px;color:#a9c2e2}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}.badge{padding:6px 12px;border-radius:99px;background:#26344b;color:#a9bad3}.badge.on{background:#164d37;color:#79e0a8}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.card{background:#151f30;border:1px solid #27364d;border-radius:12px;padding:16px;margin:12px 0}.metric{font-size:20px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.label{font-size:11px;color:#8fa3bf;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px}button,select,input{font:inherit;padding:9px 12px;border-radius:7px;border:1px solid #405574;background:#202d42;color:#fff}input{width:100%;max-width:100%;min-width:0}button{cursor:pointer;background:#2869bb;border-color:#397ed4;font-weight:600}button.secondary{background:#27344a;border-color:#40516a}button.danger{background:#9e3e4d;border-color:#c95768}button:disabled{opacity:.45;cursor:not-allowed}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.profile{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px;border:1px solid #2b3b54;border-radius:9px;margin:8px 0;background:#111a29}.profile small{display:block;color:#8fa3bf;margin-top:4px}.profile button{white-space:nowrap}pre{white-space:pre-wrap;max-height:430px;overflow:auto;background:#0a101b;padding:12px;border-radius:8px;color:#b9c9dc;font-size:12px}@media(max-width:650px){.grid{grid-template-columns:repeat(2,1fr)}.top{align-items:flex-start;gap:12px;flex-direction:column}}
+:root{color-scheme:dark}*{box-sizing:border-box}html,body{max-width:100%;overflow-x:hidden}body{font:15px system-ui,-apple-system,sans-serif;background:#0b1220;color:#e8eef7;max-width:980px;margin:0 auto;padding:24px 16px}h1{margin:0;font-size:25px}h2{font-size:16px;margin:0 0 14px;color:#a9c2e2}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}.badge{padding:6px 12px;border-radius:99px;background:#26344b;color:#a9bad3}.badge.on{background:#164d37;color:#79e0a8}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.grid>div,.profile>div{min-width:0}.card{min-width:0;background:#151f30;border:1px solid #27364d;border-radius:12px;padding:16px;margin:12px 0}.metric{font-size:20px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.label{font-size:11px;color:#8fa3bf;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px}button,select,input{font:inherit;padding:9px 12px;border-radius:7px;border:1px solid #405574;background:#202d42;color:#fff}input{width:100%;max-width:100%;min-width:0}button{cursor:pointer;background:#2869bb;border-color:#397ed4;font-weight:600}button.secondary{background:#27344a;border-color:#40516a}button.danger{background:#9e3e4d;border-color:#c95768}button:disabled{opacity:.45;cursor:not-allowed}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.row span{min-width:0;overflow-wrap:anywhere}.profile{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px;border:1px solid #2b3b54;border-radius:9px;margin:8px 0;background:#111a29}.profile b,.profile small{overflow-wrap:anywhere}.profile small{display:block;color:#8fa3bf;margin-top:4px}.profile button{flex:0 0 auto;white-space:nowrap}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:430px;overflow:auto;background:#0a101b;padding:12px;border-radius:8px;color:#b9c9dc;font-size:12px}@media(max-width:650px){body{padding:16px 10px}.card{padding:14px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.top{align-items:flex-start;gap:12px;flex-direction:column}.profile{align-items:flex-start}.profile button{padding:9px 11px}}@media(max-width:380px){.profile{flex-direction:column}.profile button{width:100%}}
 </style><div class=top><div><h1>llama.cpp Launcher</h1><div style='color:#8fa3bf;margin-top:4px'>Tailscale remote control</div></div><span id=badge class=badge>Offline</span></div>
 <div class=card><h2>Server status</h2><div id=metrics class=grid><div><div class=label>Model</div><div class=metric id=model>—</div></div><div><div class=label>Backend</div><div class=metric id=backend>—</div></div><div><div class=label>PID</div><div class=metric id=pid>—</div></div><div><div class=label>Uptime</div><div class=metric id=uptime>—</div></div></div><div class=row style='margin-top:16px'><button class=secondary onclick=status()>Refresh</button><button class=danger id=stopBtn onclick=stop() disabled>Stop server</button><span id=message style='color:#a9bad3'></span></div></div>
 <div class=card><h2>Available profiles</h2><div id=profiles><div style='color:#8fa3bf'>Enter the token, then press Refresh.</div></div></div>
@@ -1740,7 +1714,6 @@ class LauncherApp:
 
     # ---------------- remote control
     def remote_status(self) -> dict:
-        self.server.scan_runtime_health()
         running = self.server.running
         return {
             "ok": True,
@@ -2152,21 +2125,6 @@ class LauncherApp:
             if now - self._last_adopt_attempt >= self.ADOPT_SCAN_INTERVAL:
                 self._last_adopt_attempt = now
                 self.server.adopt_existing_server()
-        self.server.scan_runtime_health()
-        if self.server.degraded_reason and not self.server.degraded_warning_shown:
-            self.server.degraded_warning_shown = True
-            reason = self.server.degraded_reason
-            with self.server_lock:
-                stop_message = self.server.stop()
-            messagebox.showwarning(
-                "llama-server 慢速模式（已自動停止）",
-                f"{reason}\n\n"
-                "這個狀態可能讓生成速度降到約 7–12 t/s，"
-                "launcher 已自動停止伺服器。\n"
-                f"{stop_message}\n\n"
-                "目前即使 nvidia-smi 顯示 GPU1 0 MB，Vulkan allocator仍可能失敗。\n"
-                "請重新啟動 Windows，或改用較低 context後再試。",
-            )
         self._update_server_ui()
         # server 執行中 2s 輪詢（狀態/uptime 要即時）；idle 時 5s 就夠，
         # 盡量減少 Windows 上主執行緒的定時活動。
