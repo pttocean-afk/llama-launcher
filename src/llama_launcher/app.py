@@ -222,6 +222,32 @@ def preserve_unmanaged_extra_args(extra: str) -> list[str]:
             i += 1
     return out
 
+# llama.cpp --reasoning-effort 可選值（b10621+）。"default" = 不傳旗標，
+# 由模型內建 chat template 決定思考深度。
+REASONING_EFFORTS = ("default", "minimal", "low", "medium", "high", "xhigh", "max")
+
+
+def reasoning_effort_value(profile: dict) -> str:
+    """正規化 profile 的 reasoning_effort（缺省/未知值 → "default"）。"""
+    value = str(profile.get("reasoning_effort") or "default").strip().lower()
+    return value if value in REASONING_EFFORTS else "default"
+
+
+def build_reasoning_args(profile: dict) -> list[str]:
+    """組 --reasoning / --reasoning-effort 參數。
+
+    effort 只在思考模式開啟時有意義（關閉時模型不會思考，傳了也沒用），
+    且 "default" 不傳旗標、保持模板預設行為。
+    """
+    reasoning = profile.get("reasoning", "off")
+    args = ["--reasoning", "on" if reasoning == "on" else "off"]
+    if reasoning == "on":
+        effort = reasoning_effort_value(profile)
+        if effort != "default":
+            args += ["--reasoning-effort", effort]
+    return args
+
+
 # 預設組態（對應原本 bat 的參數）
 DEFAULT_PROFILE = {
     "name": "",
@@ -230,6 +256,7 @@ DEFAULT_PROFILE = {
     "vision_enabled": False, # 保留mmproj配對，但可在啟動時暫停載入
     "default_ctx": 131072,
     "reasoning": "off",     # off / on
+    "reasoning_effort": "default",  # default / minimal / low / medium / high / xhigh / max
     "gpu_split": "16,8",
     "backend": "cuda",      # cuda / vulkan
     "jinja": False,          # 使用 GGUF 內建 Jinja chat template
@@ -771,10 +798,7 @@ class ServerManager:
             server_args += profile["extra_args"].split()
         if "--parallel" not in server_args:
             server_args += ["--parallel", "1"]
-        if profile.get("reasoning") == "on":
-            server_args += ["--reasoning", "on"]
-        else:
-            server_args += ["--reasoning", "off"]
+        server_args += build_reasoning_args(profile)
         if profile.get("jinja", False) and "--jinja" not in server_args:
             server_args += ["--jinja"]
         if mtp_enabled:
@@ -891,7 +915,7 @@ const $=id=>document.getElementById(id);const saved=localStorage.getItem('llamaT
 function saveToken(){localStorage.setItem('llamaToken',$('token').value.trim());status()}
 async function call(path,method='GET',body){const token=$('token').value.trim();if(!token)throw Error('Please enter the control token');localStorage.setItem('llamaToken',token);const r=await fetch(path,{method,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});const text=await r.text();let d;try{d=JSON.parse(text)}catch{d={error:text}}if(!r.ok)throw Error(d.error||('HTTP '+r.status));return d}
 function renderStatus(s){$('badge').textContent=s.running?'Running':'Stopped';$('badge').className='badge '+(s.running?'on':'');$('model').textContent=s.profile||'—';$('backend').textContent=s.backend||'—';$('pid').textContent=s.pid||'—';$('uptime').textContent=s.uptime||'—';$('stopBtn').disabled=!s.running}
-function renderProfiles(list,running){const box=$('profiles');box.textContent='';if(!list.length){const none=document.createElement('div');none.style.color='#8fa3bf';none.textContent='No profiles found.';box.appendChild(none);return}for(const x of list){const row=document.createElement('div');row.className='profile';const info=document.createElement('div');const name=document.createElement('b');name.textContent=x.name;info.appendChild(name);const detail=document.createElement('small');detail.textContent=String(x.backend||'').toUpperCase()+' · '+((Number(x.default_ctx)||0)/1024).toFixed(0)+'K context · reasoning '+(x.reasoning||'');info.appendChild(detail);row.appendChild(info);const btn=document.createElement('button');btn.textContent='Start';if(!running){btn.addEventListener('click',()=>start(String(x.model||'')))}else{btn.disabled=true}row.appendChild(btn);box.appendChild(row)}}
+function renderProfiles(list,running){const box=$('profiles');box.textContent='';if(!list.length){const none=document.createElement('div');none.style.color='#8fa3bf';none.textContent='No profiles found.';box.appendChild(none);return}for(const x of list){const row=document.createElement('div');row.className='profile';const info=document.createElement('div');const name=document.createElement('b');name.textContent=x.name;info.appendChild(name);const detail=document.createElement('small');let dtext=String(x.backend||'').toUpperCase()+' · '+((Number(x.default_ctx)||0)/1024).toFixed(0)+'K context · reasoning '+(x.reasoning||'');if(x.reasoning==='on'&&x.reasoning_effort&&x.reasoning_effort!=='default'){dtext+=' · effort '+x.reasoning_effort}detail.textContent=dtext;info.appendChild(detail);row.appendChild(info);const btn=document.createElement('button');btn.textContent='Start';if(!running){btn.addEventListener('click',()=>start(String(x.model||'')))}else{btn.disabled=true}row.appendChild(btn);box.appendChild(row)}}
 async function status(){try{const [s,p]=await Promise.all([call('/api/status'),call('/api/profiles')]);renderStatus(s);renderProfiles(p.profiles||[],s.running);if(s.degraded)$('message').textContent='Warning: '+s.degraded}catch(e){$('message').textContent='Error: '+e.message}}
 async function start(model){try{$('message').textContent='Starting...';await call('/api/start','POST',{model});await status();$('message').textContent='Started'}catch(e){$('message').textContent='Error: '+e.message}}
 async function stop(){if(!confirm('Stop the current llama-server?'))return;try{$('message').textContent='Stopping...';await call('/api/stop','POST');await status();$('message').textContent='Stopped'}catch(e){$('message').textContent='Error: '+e.message}}
@@ -1220,6 +1244,7 @@ class LauncherApp:
             logging.getLogger("llama_launcher").warning(
                 "Control API bind failed on %s: %s", CONTROL_PORT, exc)
         self.log_viewer: LogViewer | None = None
+        self.performance_viewer = None  # 效能分析視窗（可重複開啟，聚焦既有）
 
         # ---- Modern dark dashboard: favorites/control on the left, full-height log on the right.
         root.title("llama.cpp Launcher")
@@ -1339,30 +1364,28 @@ class LauncherApp:
         self.ctx_var = tk.StringVar(value="128")
         self.backend_var = tk.StringVar(value="CUDA")
         self.vision_var = tk.BooleanVar(value=False)
-        self.thinking_var = tk.BooleanVar(value=False)
+        # THINKING 下拉：off = 不思考；default/minimal/…/max = 思考 + 強度
+        self.effort_var = tk.StringVar(value="off")
         control_label("CONTEXT (K)", 0, 0)
-        control_label("BACKEND", 0, 1)
+        control_label("ENABLE VISION", 0, 1)
         self.ctx_entry = tk.Entry(
             controls, textvariable=self.ctx_var, font=("Segoe UI", 10),
             bg="#202838", fg="#eef2f8", insertbackground="white",
             relief="flat", highlightthickness=1, highlightbackground="#303b4e")
         self.ctx_entry.grid(row=1, column=0, sticky="ew", padx=(0, 6),
                             pady=(0, 10), ipady=5)
-        self.backend_combo = combo(self.backend_var, ["CUDA", "Vulkan"], 1, 1)
         self.vision_check = tk.Checkbutton(
             controls, text="Enable vision projector", variable=self.vision_var,
             font=("Segoe UI", 9, "bold"), bg="#171e2a", fg="#dce6f3",
             activebackground="#171e2a", activeforeground="white",
             selectcolor="#253045", anchor="w")
-        self.vision_check.grid(row=2, column=0, sticky="ew", padx=(0, 6),
+        self.vision_check.grid(row=1, column=1, sticky="ew", padx=(6, 0),
                                pady=(0, 10))
-        self.thinking_check = tk.Checkbutton(
-            controls, text="Enable Thinking", variable=self.thinking_var,
-            font=("Segoe UI", 9, "bold"), bg="#171e2a", fg="#dce6f3",
-            activebackground="#171e2a", activeforeground="white",
-            selectcolor="#253045", anchor="w")
-        self.thinking_check.grid(row=2, column=1, sticky="ew", padx=(6, 0),
-                                 pady=(0, 10))
+        control_label("BACKEND", 2, 0)
+        control_label("THINKING", 2, 1)
+        self.backend_combo = combo(self.backend_var, ["CUDA", "Vulkan"], 3, 0)
+        self.effort_combo = combo(self.effort_var,
+                                  ["off"] + list(REASONING_EFFORTS), 3, 1)
 
         self.power_btn = tk.Button(
             left, text="▶  START SERVER", font=("Segoe UI", 12, "bold"),
@@ -1383,6 +1406,12 @@ class LauncherApp:
                   relief="flat", padx=6, pady=9).pack(
                       side="left", fill="x", expand=True)
         tk.Button(utility_row, text="Diagnostics", command=self.on_diagnostics,
+                  font=("Segoe UI", 9, "bold"), bg="#253045", fg="#dce6f3",
+                  activebackground="#34445f", activeforeground="white",
+                  relief="flat", padx=6, pady=9).pack(
+                      side="left", fill="x", expand=True, padx=(8, 0))
+        tk.Button(utility_row, text="📊 效能分析",
+                  command=self.open_performance_viewer,
                   font=("Segoe UI", 9, "bold"), bg="#253045", fg="#dce6f3",
                   activebackground="#34445f", activeforeground="white",
                   relief="flat", padx=6, pady=9).pack(
@@ -1735,7 +1764,8 @@ class LauncherApp:
         return [{"name": p.get("name", ""), "model": p.get("model", ""),
                  "backend": p.get("backend", "cuda"),
                  "default_ctx": p.get("default_ctx", 131072),
-                 "reasoning": p.get("reasoning", "off")}
+                 "reasoning": p.get("reasoning", "off"),
+                 "reasoning_effort": reasoning_effort_value(p)}
                 for p in self.profiles if p.get("model")]
 
     def remote_logs(self) -> dict:
@@ -1859,6 +1889,17 @@ class LauncherApp:
     def open_model_library(self):
         ModelLibraryDialog(self.root, self)
 
+    def open_performance_viewer(self):
+        """📊 效能分析：單個可重用視窗；重複點擊聚焦既有視窗。"""
+        from .performance_viewer import PerformanceViewer
+        viewer = self.performance_viewer
+        if viewer is None or not viewer.winfo_exists():
+            viewer = PerformanceViewer(self.root, LOGS_DIR, LLAMA_DIR)
+            self.performance_viewer = viewer
+        else:
+            viewer.lift()
+            viewer.focus_force()
+
     def on_select(self, _event=None):
         self.update_detail()
 
@@ -1885,18 +1926,27 @@ class LauncherApp:
                 vision_state,
                 f"Default context: {format_context_k(p.get('default_ctx', 131072))}K",
             ]
+            effort = reasoning_effort_value(p)
+            if p.get("reasoning", "off") == "on":
+                thinking_state = f"ON · effort {effort}" if effort != "default" else "ON"
+            else:
+                thinking_state = "OFF"
+            lines.append(f"Thinking: {thinking_state}")
             self.detail_text.insert("end", "\n".join(lines))
         self.detail_text.config(state="disabled")
         if p:
             self.backend_var.set(p.get("backend", "cuda").upper())
             self.ctx_var.set(format_context_k(p.get("default_ctx", 131072)))
-            self.thinking_var.set(p.get("reasoning", "off") == "on")
+            if p.get("reasoning", "off") == "on":
+                self.effort_var.set(reasoning_effort_value(p))
+            else:
+                self.effort_var.set("off")
             has_mmproj = bool(p.get("mmproj"))
             self.vision_var.set(profile_vision_enabled(p))
             self.vision_check.config(state="normal" if has_mmproj else "disabled")
         else:
             self.vision_var.set(False)
-            self.thinking_var.set(False)
+            self.effort_var.set("off")
             self.vision_check.config(state="disabled")
 
     # ---------------- 動作
@@ -1913,7 +1963,13 @@ class LauncherApp:
             return
         p["backend"] = self.backend_var.get().lower()
         p["vision_enabled"] = bool(p.get("mmproj")) and self.vision_var.get()
-        p["reasoning"] = "on" if self.thinking_var.get() else "off"
+        thinking = self.effort_var.get()
+        if thinking == "off":
+            p["reasoning"] = "off"
+            p["reasoning_effort"] = "default"
+        else:
+            p["reasoning"] = "on"
+            p["reasoning_effort"] = thinking
         # 首頁 Context只影響本次啟動；預設值在 Settings裡修改。
         self.cfg.setdefault("profiles", [])
         for i, sp in enumerate(self.cfg["profiles"]):
@@ -2593,8 +2649,8 @@ class SettingsDialog(tk.Toplevel):
         self.app = app
         self.profile = profile
         self.title(f"設定 — {profile.get('name','')}")
-        self.geometry("620x900")
-        self.minsize(580, 820)
+        self.geometry("640x560")
+        self.minsize(600, 480)
         self.resizable(True, True)
         self.transient(parent)
         self.grab_set()
@@ -2615,14 +2671,21 @@ class SettingsDialog(tk.Toplevel):
             padx=16, pady=8,
         ).pack(side="right", padx=(0, 10))
 
-        body = tk.Frame(self, padx=16, pady=12)
-        body.pack(side="top", fill="both", expand=True)
+        root_body = tk.Frame(self)
+        root_body.pack(side="top", fill="both", expand=True)
 
-        tk.Label(body, text="個別模型設定",
-                 font=("Segoe UI", 11, "bold")).pack(anchor="w")
-        tk.Label(body, text="全域設定（llama.cpp 路徑、開機啟動、Remote Access）請到主畫面 Settings。",
-                 font=("Segoe UI", 8), fg="#888", anchor="w").pack(anchor="w", pady=(2, 6))
+        # 分頁：模型 / 加速 / 進階 —— 避免整串選項把視窗撐爆
+        nb = ttk.Notebook(root_body)
+        nb.pack(fill="both", expand=True)
+        tab_model = tk.Frame(nb, padx=18, pady=14)
+        tab_perf = tk.Frame(nb, padx=18, pady=14)
+        tab_adv = tk.Frame(nb, padx=18, pady=14)
+        nb.add(tab_model, text="模型")
+        nb.add(tab_perf, text="加速")
+        nb.add(tab_adv, text="進階")
 
+        # ============ 頁籤一：模型 ============
+        body = tab_model
         tk.Label(body, text=f"模型：{profile.get('name','')}",
                  font=("Segoe UI", 9), fg="#666", anchor="w").pack(anchor="w", pady=(0, 8))
 
@@ -2684,6 +2747,44 @@ class SettingsDialog(tk.Toplevel):
             body, textvariable=self.backend_var, values=["CUDA", "Vulkan"],
             state="readonly")
         self.backend_combo.pack(fill="x")
+
+        # ---- 思考模式
+        tk.Label(body, text="思考模式（Reasoning / Thinking）", font=("Segoe UI", 9),
+                 anchor="w").pack(fill="x", pady=(8, 2))
+        self.reasoning_var = tk.StringVar(value=profile.get("reasoning", "off"))
+        rf = tk.Frame(body)
+        rf.pack(fill="x")
+        tk.Radiobutton(rf, text="關閉（回應較快）", variable=self.reasoning_var,
+                       value="off").pack(side="left")
+        tk.Radiobutton(rf, text="開啟（會先想再回答，較慢）", variable=self.reasoning_var,
+                       value="on").pack(side="left")
+
+        # ---- 思考強度
+        tk.Label(body, text="思考強度（Reasoning effort）", font=("Segoe UI", 9),
+                 anchor="w").pack(fill="x", pady=(8, 2))
+        self.reasoning_effort_var = tk.StringVar(
+            value=reasoning_effort_value(profile))
+        self.reasoning_effort_combo = ttk.Combobox(
+            body, textvariable=self.reasoning_effort_var,
+            values=list(REASONING_EFFORTS), state="readonly")
+        self.reasoning_effort_combo.pack(fill="x")
+        tk.Label(
+            body,
+            text="只在思考模式「開啟」時生效；default＝由模型模板決定。",
+            font=("Segoe UI", 8), fg="#888", anchor="w",
+            wraplength=540, justify="left",
+        ).pack(anchor="w", pady=(2, 0))
+
+        def _sync_settings_effort_state(*_args):
+            self.reasoning_effort_combo.config(
+                state="readonly" if self.reasoning_var.get() == "on"
+                else "disabled")
+        self.reasoning_var.trace_add("write", _sync_settings_effort_state)
+        _sync_settings_effort_state()
+
+
+        # ============ 頁籤二：加速 ============
+        body = tab_perf
         # ---- MTP speculative decoding
         tk.Label(body, text="MTP 多 Token 預測", font=("Segoe UI", 9),
                  anchor="w").pack(fill="x", pady=(8, 2))
@@ -2692,11 +2793,6 @@ class SettingsDialog(tk.Toplevel):
             body, textvariable=self.mtp_var, values=["Off", "On"],
             state="readonly")
         self.mtp_combo.pack(fill="x")
-        tk.Label(
-            body,
-            text="只適用含 MTP / NextN 權重的模型；會增加 VRAM 使用量。預設關閉。",
-            font=("Segoe UI", 8), fg="#888", anchor="w",
-        ).pack(anchor="w")
 
         # ---- Jinja chat template
         tk.Label(body, text="Jinja 聊天模板", font=("Segoe UI", 9),
@@ -2709,22 +2805,6 @@ class SettingsDialog(tk.Toplevel):
             variable=self.jinja_var,
             anchor="w",
         ).pack(fill="x")
-        tk.Label(
-            body,
-            text="可能改善 Qwen 多輪 Thinking／工具格式；若客戶端不相容可關閉。",
-            font=("Segoe UI", 8), fg="#888", anchor="w",
-        ).pack(anchor="w")
-
-        # ---- 思考模式
-        tk.Label(body, text="思考模式（Reasoning / Thinking）", font=("Segoe UI", 9),
-                 anchor="w").pack(fill="x", pady=(8, 2))
-        self.reasoning_var = tk.StringVar(value=profile.get("reasoning", "off"))
-        rf = tk.Frame(body)
-        rf.pack(fill="x")
-        tk.Radiobutton(rf, text="關閉（回應較快）", variable=self.reasoning_var,
-                       value="off").pack(side="left")
-        tk.Radiobutton(rf, text="開啟（會先想再回答，較慢）", variable=self.reasoning_var,
-                       value="on").pack(side="left")
 
         # ---- 顯示卡分配
         tk.Label(body, text="顯示卡分配", font=("Segoe UI", 9),
@@ -2766,9 +2846,7 @@ class SettingsDialog(tk.Toplevel):
                 self.gpu_var.set("自動（讓程式決定）")
 
         self.gpu_combo.bind("<<ComboboxSelected>>", on_gpu_custom)
-        tk.Label(body, text="例：16,8 = 第一張卡分 16 層、第二張分 8 層。"
-                            "實際可用層數取決於模型與 VRAM。",
-                 font=("Segoe UI", 8), fg="#888", anchor="w").pack(anchor="w")
+
         # ---- KV 快取精度
         tk.Label(body, text="KV 快取精度", font=("Segoe UI", 9),
                  anchor="w").pack(fill="x", pady=(8, 2))
@@ -2829,6 +2907,9 @@ class SettingsDialog(tk.Toplevel):
 
         self.ngl_combo.bind("<<ComboboxSelected>>", on_ngl_custom)
 
+        # ============ 頁籤三：進階 ============
+        body = tab_adv
+
         # ---- 進階參數（extra args）
         tk.Label(body, text="進階參數（extra args）", font=("Segoe UI", 9),
                  anchor="w").pack(fill="x", pady=(8, 2))
@@ -2859,6 +2940,8 @@ class SettingsDialog(tk.Toplevel):
 
         p["default_ctx"] = ctx_val
         p["reasoning"] = self.reasoning_var.get()
+        p["reasoning_effort"] = reasoning_effort_value(
+            {"reasoning_effort": self.reasoning_effort_var.get()})
         gpu_label = self.gpu_var.get()
         if gpu_label == "自訂層數分配…":
             # combo 只選了選項但沒輸入數值：直接取暫存的自訂值
@@ -2917,13 +3000,13 @@ class SettingsDialog(tk.Toplevel):
 
 
 class AddModelDialog(tk.Toplevel):
-    """加入新模型：名稱 + GGUF + mmproj（可空）+ 預設 ctx + reasoning。"""
+    """加入新模型：名稱 + GGUF + mmproj（可空）+ 預設 ctx + reasoning + 思考強度。"""
 
     def __init__(self, parent, app: LauncherApp):
         super().__init__(parent)
         self.app = app
         self.title("加入新模型")
-        self.geometry("520x380")
+        self.geometry("520x470")
         self.resizable(False, False)
         self.transient(parent)
         self.grab_set()
@@ -2983,6 +3066,23 @@ class AddModelDialog(tk.Toplevel):
         tk.Radiobutton(rf, text="on", variable=self.reasoning_var,
                        value="on").pack(side="left")
 
+        tk.Label(body, text="思考強度 (reasoning effort)", font=("Segoe UI", 9),
+                 anchor="w").pack(fill="x", pady=(8, 2))
+        self.reasoning_effort_var = tk.StringVar(value="default")
+        self.reasoning_effort_combo = ttk.Combobox(
+            body, textvariable=self.reasoning_effort_var,
+            values=list(REASONING_EFFORTS), state="readonly")
+        self.reasoning_effort_combo.pack(fill="x")
+        tk.Label(body, text="只在思考模式 on 時生效；default＝由模型模板決定。",
+                 font=("Segoe UI", 8), fg="#888", anchor="w").pack(anchor="w")
+
+        def _sync_add_effort_state(*_args):
+            self.reasoning_effort_combo.config(
+                state="readonly" if self.reasoning_var.get() == "on"
+                else "disabled")
+        self.reasoning_var.trace_add("write", _sync_add_effort_state)
+        _sync_add_effort_state()
+
         btns = tk.Frame(self, padx=16, pady=10)
         btns.pack(fill="x")
         tk.Button(btns, text="儲存", command=self.save,
@@ -3016,6 +3116,8 @@ class AddModelDialog(tk.Toplevel):
             "vision_enabled": bool(mmproj),
             "default_ctx": ctx_val,
             "reasoning": self.reasoning_var.get(),
+            "reasoning_effort": reasoning_effort_value(
+                {"reasoning_effort": self.reasoning_effort_var.get()}),
             "gpu_split": "16,8",
             "backend": "cuda",
             "extra_args": "-ctk q4_0 -ctv q4_0 --parallel 1",

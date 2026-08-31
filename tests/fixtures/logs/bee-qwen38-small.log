@@ -1,0 +1,56 @@
+# 2026-08-30T18:23:31.114749  Qwen3.8-27B-IQ4_NL
+# VRAM preflight: GPU0 765→762 MB, GPU1 0→0 MB, ComfyUI inactive
+# E:\llama-cpp\benchmark-runtimes\beellama-v0.4.4-cuda-13.3\llama-server.exe -m E:\llama-cpp\models\Qwen3.8-27B-IQ4_NL.gguf --mmproj E:\llama-cpp\models\mmproj-Qwen3.8-27B-Uncensored-vision-f16.gguf -ngl 999 -c 196608 --host 0.0.0.0 --port 8080 -sm layer -cram 24000 -ts 16,8 -mg 0 -ctk q4_0 -ctv q4_0 --parallel 1 --reasoning on
+================================================================================
+0.00.121.892 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)
+
+0.00.122.237 W srv  llama_server: -----------------
+
+0.00.130.001 I srv    load_model: loading model 'E:\llama-cpp\models\Qwen3.8-27B-IQ4_NL.gguf'
+
+0.05.000.000 I srv    load_model: loaded multimodal model, 'E:\llama-cpp\models\mmproj-Qwen3.8-27B-Uncensored-vision-f16.gguf'
+
+0.09.012.310 E ggml_backend_cuda_buffer_type_alloc_buffer: allocating 1657.13 MiB on device 1: cudaMalloc failed: out of memory
+
+0.09.213.648 W load_hparams: Qwen-VL models require at minimum 1024 image tokens to function correctly on grounding tasks
+
+0.09.978.461 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 196608, kv_unified = 'false'
+
+0.09.978.479 I srv  llama_server: model loaded
+
+0.09.984.768 I srv  llama_server: listening on http://0.0.0.0:8080
+
+4.38.338.724 I slot launch_slot_: id  0 | task 0 | processing task, is_child = 0
+
+4.39.229.074 I slot print_timing: id  0 | task 0 | prompt eval time =     890.32 ms /    54 tokens (   16.49 ms per token,    60.65 tokens per second)
+
+4.39.229.082 I slot print_timing: id  0 | task 0 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+
+4.39.229.084 I slot print_timing: id  0 | task 0 |       total time =     890.32 ms /    55 tokens
+
+4.39.229.090 I slot print_timing: id  0 | task 0 |    graphs reused =        52
+
+4.39.229.152 I slot      release: id  0 | task 0 | stop processing: n_tokens = 54, truncated = 0
+
+5.32.350.360 I slot launch_slot_: id  0 | task 4 | processing task, is_child = 0
+
+5.39.145.609 I slot print_timing: id  0 | task 4 | prompt eval time =    1979.09 ms /  2366 tokens (    0.84 ms per token,  1195.50 tokens per second)
+
+5.39.145.610 I slot print_timing: id  0 | task 4 | prompt cache: source = ram, cached = 2366 tokens, reprocessed = 0 tokens
+
+5.39.145.617 I slot print_timing: id  0 | task 4 |        eval time =    4816.12 ms /   185 tokens (   26.17 ms per token,    38.20 tokens per second)
+
+5.39.145.618 I slot print_timing: id  0 | task 4 |       total time =    6795.22 ms /  2551 tokens
+
+5.39.145.620 I slot print_timing: id  0 | task 4 |    graphs reused =       380
+
+5.39.145.812 I slot      release: id  0 | task 4 | stop processing: n_tokens = 2550, truncated = 0
+
+6.00.000.000 I slot launch_slot_: id  0 | task 9 | processing task, is_child = 0
+
+6.05.000.000 I slot print_timing: id  0 | task 9 | prompt eval time =    5000.00 ms /  1000 tokens (    5.00 ms per token,   200.00 tokens per second)
+
+6.10.000.000 I slot print_timing: id  0 | task 9 | n_gen =     30, tg =  35.00 t/s, tg_3s =  35.10 t/s
+
+6.12.000.000 I slot print_timing: id  0 | task 9 | n_gen =     60, tg =  34.80 t/s, tg_3s =  34.90 t/s
+

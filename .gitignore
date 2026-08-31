@@ -13,12 +13,15 @@ htmlcov/
 # Runtime and private data
 /data/
 logs/
+# ...but keep the small sanitized parser fixtures (not runtime logs)
+!tests/fixtures/logs/
 secrets/
 control-token.txt
 profiles.json
 settings.json
 *.gguf
 *.log
+!tests/fixtures/logs/*.log
 *.bak*
 
 # Editors / OS

@@ -13,6 +13,7 @@ PORTABLE_FIELDS = (
     "vision_enabled",
     "default_ctx",
     "reasoning",      # "on" / "off"
+    "reasoning_effort",  # "default" / "minimal" / "low" / "medium" / "high" / "xhigh" / "max"
     "gpu_split",
     "backend",        # "cuda" / "vulkan"
     "jinja",

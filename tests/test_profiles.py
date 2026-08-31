@@ -66,6 +66,25 @@ def test_export_roundtrip(tmp_path: Path):
     assert by_model["b.gguf"]["reasoning"] == "on"
 
 
+def test_export_roundtrip_reasoning_effort(tmp_path: Path):
+    profiles = [_profile("B", "b.gguf", reasoning="on",
+                         reasoning_effort="high")]
+    path = tmp_path / "export.json"
+    path.write_text(json.dumps(export_profiles(profiles)), encoding="utf-8")
+    loaded = read_export(path)
+    assert loaded[0]["reasoning_effort"] == "high"
+
+
+def test_merge_imported_fills_missing_reasoning_effort():
+    current = [_profile("A", "a.gguf")]
+    imported = [_profile("A", "a.gguf", reasoning_effort="xhigh")]
+    merged, added, updated = merge_imported(current, imported)
+    assert added == 0
+    assert updated == 1
+    a = next(p for p in merged if p["model"] == "a.gguf")
+    assert a["reasoning_effort"] == "xhigh"
+
+
 def test_read_export_rejects_bad_file(tmp_path: Path):
     bad = tmp_path / "bad.json"
     bad.write_text('{"wrong": 1}', encoding="utf-8")
