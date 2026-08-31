@@ -151,6 +151,8 @@ python3 -m venv .venv
 ```
 
 > 本機手動打包的完整 SOP（WSL→Windows interop：Python/PyInstaller/Inno Setup 路徑、逐條指令、踩坑清單）見 [docs/BUILD-WINDOWS.md](docs/BUILD-WINDOWS.md)。
+>
+> 雙平台（Windows + Linux）打包＋GitHub Release 上傳的完整流程見 [docs/RELEASING.md](docs/RELEASING.md)。
 
 **Linux build**（用 distro 系統 Python，須含 Tk）
 
@@ -331,6 +333,9 @@ python3 -m venv .venv
 
 > Manual local packaging SOP (WSL→Windows interop: Python/PyInstaller/Inno Setup
 > paths, exact commands, and known pitfalls) — see [docs/BUILD-WINDOWS.md](docs/BUILD-WINDOWS.md).
+>
+> Full dual-platform (Windows + Linux) packaging + GitHub Release publishing flow:
+> see [docs/RELEASING.md](docs/RELEASING.md).
 
 **Linux build** (use the distribution system Python with Tk installed)
 
