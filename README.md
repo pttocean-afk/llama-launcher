@@ -6,7 +6,7 @@
 
 啟動、接管、檢視、遠端控制，全部在一個畫面搞定，不用再開 terminal 打指令。
 
-![Windows](https://img.shields.io/badge/Windows-✓-0078D6) ![Linux](https://img.shields.io/badge/Linux-x64-✓-A855F7) ![License](https://img.shields.io/badge/License-MIT-blue) ![tests](https://img.shields.io/badge/tests-38%20passed-green)
+![Windows](https://img.shields.io/badge/Windows-✓-0078D6) ![Linux](https://img.shields.io/badge/Linux-x64-✓-A855F7) ![License](https://img.shields.io/badge/License-MIT-blue) ![tests](https://img.shields.io/badge/tests-122%20passed-green)
 
 </div>
 
@@ -29,6 +29,7 @@
 | 功能 | 說明 |
 |---|---|
 | 🗂️ Model profiles | 每個模型的 context、GPU 分配、KV 精度、reasoning、思考強度、vision 各自獨立存檔 |
+| 🗂️ 分頁設定 | 模型設定採「模型／加速／進階」三頁籤，長表單不再把選項擠出視窗 |
 | 🧠 思考強度 | llama.cpp `--reasoning-effort`（default/minimal/low/medium/high/xhigh/max），思考模式開啟時可選 |
 | 🎮 GPU 分配 | 自動，或自訂各卡層數（如 `16,8`），常用分配自動記住、可刪除 |
 | 🚀 一鍵啟動 | 幫你組好 `-ngl -c -ts -ctk/ctv --parallel --reasoning-effort` 等參數，直接 launch |
@@ -46,7 +47,11 @@
 
 ![LlamaLauncher 主畫面](docs/screenshot.png)
 
-*主畫面：Favorite Models、整合 Log、一鍵 Start/Stop*
+*主畫面：Favorite Models、整合 Log、一鍵 Start/Stop；思考強度直接在 THINKING 下拉選（off = 不思考）*
+
+![LlamaLauncher 模型設定（分頁）](docs/screenshot-settings.png)
+
+*模型設定採分頁（模型／加速／進階），不再一長串把選項擠出視窗*
 
 ![LlamaLauncher 遠端啟動介面](docs/remote.png)
 
@@ -66,7 +71,7 @@
 ### Linux (x86_64)
 
 ```bash
-wget -c https://github.com/pttocean-afk/llama-launcher/releases/latest/download/LlamaLauncher-Linux-x86_64.tar.gz  # 把 your-user 換成你的帳號
+wget -c https://github.com/pttocean-afk/llama-launcher/releases/latest/download/LlamaLauncher-Linux-x86_64.tar.gz
 tar -xzf LlamaLauncher-Linux-x86_64.tar.gz
 ./LlamaLauncher/LlamaLauncher
 ```
@@ -211,6 +216,7 @@ GPU split, and remote access are a pain. **Llama Launcher** wraps it all up:
 | Feature | Description |
 |---|---|
 | Model profiles | Per-model context / GPU split / KV / reasoning / thinking intensity / vision |
+| Tabbed settings | Per-model dialog uses Model / Performance / Advanced tabs — long forms no longer overflow the window |
 | Thinking intensity | llama.cpp `--reasoning-effort` (default/minimal/low/medium/high/xhigh/max), chosen when reasoning is on |
 | GPU split | Auto, or custom layers per GPU (e.g. `16,8`); presets remembered & removable |
 | One-click start | Builds `-ngl -c -ts -ctk/ctv --parallel --reasoning-effort` args for you |
@@ -221,6 +227,16 @@ GPU split, and remote access are a pain. **Llama Launcher** wraps it all up:
 | Legacy migration | Import old profiles / token in one click |
 | Profile export/import | Portable JSON (no local absolute paths) |
 | Performance analysis | 10K used-context bucket decode/prefill curves, fairness warnings, 6-format export |
+
+## Screenshots
+
+![LlamaLauncher main screen](docs/screenshot.png)
+
+*Main screen: favorite models, integrated log, one-click Start/Stop; thinking is chosen in the THINKING dropdown (off = no thinking)*
+
+![LlamaLauncher per-model settings (tabs)](docs/screenshot-settings.png)
+
+*Per-model settings use tabs (Model / Performance / Advanced), so long forms no longer overflow the window*
 
 ## Quick start
 
