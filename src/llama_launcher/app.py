@@ -291,7 +291,12 @@ def scan_mmproj_files() -> list[str]:
 
 
 def _model_inventory() -> tuple[list[str], list[str], dict[str, int]]:
-    """一次掃描模型目錄並快取名稱與大小，避免每次點選/搜尋都碰磁碟。"""
+    """一次掃描模型目錄並快取名稱與大小，避免每次點選/搜尋都碰磁碟。
+
+    遞迴掃描子資料夾（網友會自行分類，如 models\\Coding\\qwen.gguf），
+    名稱一律是相對於 models 的 POSIX 風格路徑（"Coding/qwen.gguf"）；
+    頂層檔案名稱不變（"qwen.gguf"），所以既有 profiles.json 完全相容。
+    不跟目錄符號連結，避免循環或重複掃描。"""
     global _MODEL_INVENTORY_CACHE
     if _MODEL_INVENTORY_CACHE is not None:
         return _MODEL_INVENTORY_CACHE
@@ -299,20 +304,47 @@ def _model_inventory() -> tuple[list[str], list[str], dict[str, int]]:
     mmprojs: list[str] = []
     sizes: dict[str, int] = {}
     if MODELS_DIR.exists():
+        found: list[tuple[str, Path]] = []
         try:
-            entries = sorted(MODELS_DIR.iterdir(), key=lambda p: p.name.lower())
+            for dirpath, dirnames, filenames in os.walk(MODELS_DIR):
+                # 排序保證掃描順序穩定（不同次啟動、不同檔案系統都一致）
+                dirnames.sort(key=str.lower)
+                for fname in sorted(filenames, key=str.lower):
+                    if not fname.lower().endswith(".gguf"):
+                        continue
+                    f = Path(dirpath) / fname
+                    # 相對路徑當名稱；頂層檔案就只是檔名
+                    rel = f.relative_to(MODELS_DIR).as_posix()
+                    found.append((rel, f))
         except OSError:
-            entries = []
-        for f in entries:
-            if f.suffix.lower() != ".gguf":
-                continue
+            pass
+        found.sort(key=lambda item: item[0].lower())
+        for rel, f in found:
             try:
-                sizes[f.name] = f.stat().st_size
+                sizes[rel] = f.stat().st_size
             except OSError:
-                sizes[f.name] = 0
-            (mmprojs if _is_mmproj(f.name) else models).append(f.name)
+                sizes[rel] = 0
+            # mmproj 判定只看檔名；資料夾名稱含 mmproj 不影響分類
+            (mmprojs if _is_mmproj(f.name) else models).append(rel)
     _MODEL_INVENTORY_CACHE = (models, mmprojs, sizes)
     return _MODEL_INVENTORY_CACHE
+
+
+def model_file(name: str) -> Path:
+    """把 profile/model 名稱（支援子資料夾相對路徑）轉成實際檔案路徑。"""
+    rel = Path(str(name or "").replace("\\", "/"))
+    # 防呆：相對路徑不允許逃出 models 目錄（如 ..\\秘密.gguf）
+    if not rel.is_absolute() and ".." in rel.parts:
+        return MODELS_DIR / "___outside_models_dir___"
+    return MODELS_DIR / rel
+
+
+def relative_model_name(path: Path) -> str:
+    """把使用者挑選的檔案轉成存檔用的名稱：models 內取相對路徑，外面退回檔名。"""
+    try:
+        return path.resolve().relative_to(MODELS_DIR.resolve()).as_posix()
+    except (ValueError, OSError):
+        return path.name
 
 
 def format_file_size(nbytes: int) -> str:
@@ -382,12 +414,15 @@ def guess_mmproj(model_name: str, mmproj_list: list[str]) -> str:
         ("27b", "mmproj-model-f16.gguf"),
     ]
     base = model_name.lower()
+    # mmproj 名稱可能是 "Coding/mmproj-x.gguf"，規則表比對用檔名部分
+    mmproj_by_base = {m.rsplit("/", 1)[-1].lower(): m for m in mmproj_list}
     for key, mm in RULES:
-        if key in base and mm in mmproj_list:
-            return mm
+        target = mmproj_by_base.get(mm.lower())
+        if key in base and target:
+            return target
     model_tokens = {t for t in re.split(r"[^a-z0-9]+", base) if len(t) >= 3}
     for mm in mmproj_list:
-        key = re.sub(r"^mmproj[-_]?", "", mm, flags=re.I)
+        key = re.sub(r"^mmproj[-_]?", "", mm.rsplit("/", 1)[-1], flags=re.I)
         key = re.sub(r"\.gguf$", "", key, flags=re.I).lower()
         mm_tokens = {t for t in re.split(r"[^a-z0-9]+", key) if len(t) >= 3}
         common = model_tokens & mm_tokens
@@ -436,6 +471,11 @@ def enable_dpi_awareness():
         ctypes.windll.user32.SetProcessDPIAware()
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------- DPI 縮放
+# DpiScale / S / fit_window_size 的實作與說明見 ui_scale.py。
+from .ui_scale import DpiScale, S, fit_window_size
 
 
 class SingleInstance:
@@ -750,9 +790,9 @@ class ServerManager:
         windows_server = VULKAN_SERVER if backend == "vulkan" else LLAMA_SERVER
         if not windows_server.exists():
             return False, f"找不到 {windows_server}"
-        model_rel = Path("models") / profile["model"]
-        if not (LLAMA_DIR / model_rel).exists():
-            return False, f"找不到模型檔：{model_rel}"
+        model_path = model_file(profile["model"])
+        if not model_path.exists():
+            return False, f"找不到模型檔：models/{profile['model']}"
         if port_in_use(PORT):
             return False, (f"Port {PORT} 已被佔用。\n"
                            "請先關閉現有的 llama-server，\n"
@@ -764,9 +804,9 @@ class ServerManager:
             return False, str(exc)
         mmproj_path = None
         if profile_vision_enabled(profile):
-            mmproj_path = LLAMA_DIR / Path("models") / profile["mmproj"]
+            mmproj_path = model_file(profile["mmproj"])
             if not mmproj_path.exists():
-                return False, f"找不到視覺模型檔：models\\{profile['mmproj']}"
+                return False, f"找不到視覺模型檔：models/{profile['mmproj']}"
         # CUDA / Vulkan 每次啟動都先清理 VRAM；不再限制 224K+ context。
         self.preflight_summary = "not required"
         if backend_requires_vram_preflight(backend):
@@ -774,7 +814,7 @@ class ServerManager:
             if not preflight_ok:
                 return False, preflight_msg
             self.preflight_summary = preflight_msg
-        server_args = [str(windows_server), "-m", str(LLAMA_DIR / model_rel)]
+        server_args = [str(windows_server), "-m", str(model_path)]
         if mmproj_path is not None:
             server_args += ["--mmproj", str(mmproj_path)]
         server_args += [
@@ -1094,8 +1134,9 @@ class LogViewer(tk.Toplevel):
         super().__init__(app.root)
         self.app = app
         self.title("llama-server Log")
-        self.geometry("860x540")
-        self.minsize(600, 300)
+        win_w, win_h = fit_window_size(self, S(860), S(540))
+        self.geometry(f"{win_w}x{win_h}")
+        self.minsize(*fit_window_size(self, S(600), S(300), screen_ratio=1.0))
 
         top = tk.Frame(self, padx=8, pady=6)
         top.pack(fill="x")
@@ -1247,9 +1288,11 @@ class LauncherApp:
         self.performance_viewer = None  # 效能分析視窗（可重複開啟，聚焦既有）
 
         # ---- Modern dark dashboard: favorites/control on the left, full-height log on the right.
+        DpiScale.init(root)
         root.title("llama.cpp Launcher")
-        root.geometry("1180x820")
-        root.minsize(980, 700)
+        win_w, win_h = fit_window_size(root, S(1180), S(820))
+        root.geometry(f"{win_w}x{win_h}")
+        root.minsize(*fit_window_size(root, S(980), S(700), screen_ratio=1.0))
         root.configure(bg="#0d1118")
         self.window_icon = None
         try:
@@ -1282,7 +1325,7 @@ class LauncherApp:
                   selectbackground=[("readonly", "#202838")],
                   selectforeground=[("readonly", "#eef2f8")])
 
-        header = tk.Frame(root, bg="#141a24", height=58)
+        header = tk.Frame(root, bg="#141a24", height=S(58))
         header.pack(fill="x")
         header.pack_propagate(False)
         tk.Label(header, text="LLAMA  CONTROL  CENTER",
@@ -1293,17 +1336,17 @@ class LauncherApp:
                                    bg="#141a24", padx=18)
         self.status_dot.pack(side="right", fill="y")
 
-        dashboard = tk.PanedWindow(root, orient="horizontal", sashwidth=7,
+        dashboard = tk.PanedWindow(root, orient="horizontal", sashwidth=S(7),
                                    sashrelief="flat", bg="#0d1118",
                                    bd=0, relief="flat")
-        dashboard.pack(fill="both", expand=True, padx=12, pady=12)
+        dashboard.pack(fill="both", expand=True, padx=S(12), pady=S(12))
 
-        left = tk.Frame(dashboard, bg="#171e2a", width=350,
+        left = tk.Frame(dashboard, bg="#171e2a", width=S(350),
                         highlightthickness=1, highlightbackground="#293244")
         right = tk.Frame(dashboard, bg="#0c1119",
                          highlightthickness=1, highlightbackground="#293244")
-        dashboard.add(left, minsize=310, width=350)
-        dashboard.add(right, minsize=520)
+        dashboard.add(left, minsize=S(310), width=S(350))
+        dashboard.add(right, minsize=S(520))
 
         tk.Label(left, text="★  FAVORITE MODELS", font=("Segoe UI", 10, "bold"),
                  fg="#9fb7d7", bg="#171e2a", anchor="w").pack(
@@ -1417,7 +1460,7 @@ class LauncherApp:
                   relief="flat", padx=6, pady=9).pack(
                       side="left", fill="x", expand=True, padx=(8, 0))
 
-        log_header = tk.Frame(right, bg="#141a24", height=46)
+        log_header = tk.Frame(right, bg="#141a24", height=S(46))
         log_header.pack(fill="x")
         log_header.pack_propagate(False)
         tk.Label(log_header, text="LIVE SERVER LOG", font=("Segoe UI", 10, "bold"),
@@ -1687,7 +1730,8 @@ class LauncherApp:
         token = _get_control_token()
         dialog = tk.Toplevel(self.root)
         dialog.title("Remote Access")
-        dialog.geometry("620x280")
+        win_w, win_h = fit_window_size(dialog, S(620), S(280))
+        dialog.geometry(f"{win_w}x{win_h}")
         dialog.transient(self.root)
         dialog.grab_set()
         body = tk.Frame(dialog, padx=18, pady=18)
@@ -1957,7 +2001,7 @@ class LauncherApp:
             return
         p = dict(p)
         try:
-            parse_context_k(self.ctx_var.get())
+            ctx_val = parse_context_k(self.ctx_var.get())
         except ValueError as exc:
             messagebox.showerror("Context格式錯誤", str(exc))
             return
@@ -1970,7 +2014,10 @@ class LauncherApp:
         else:
             p["reasoning"] = "on"
             p["reasoning_effort"] = thinking
-        # 首頁 Context只影響本次啟動；預設值在 Settings裡修改。
+        # 主畫面上的參數一併存回模型設定（含 Context）：
+        # 下次啟動或到 Settings 開啟時，看到的就是上次實際啟動的組合，
+        # 不用再到設定視窗重設一遍。
+        p["default_ctx"] = ctx_val
         self.cfg.setdefault("profiles", [])
         for i, sp in enumerate(self.cfg["profiles"]):
             if sp.get("model") == p["model"]:
@@ -1980,6 +2027,9 @@ class LauncherApp:
             self.cfg["profiles"].append(p)
         save_config(self.cfg)
         self.profiles = merge_profiles(self.cfg)
+        # 讓 detail 面板顯示存檔後的設定（Default context 等）
+        self.refresh_listbox(select_model=p["model"])
+        self.update_detail()
 
         with self.server_lock:
             ok, msg = self.server.start(p, self.ctx_var.get())
@@ -2086,7 +2136,7 @@ class LauncherApp:
     def delete_profile(self, p: dict, parent=None):
         """刪除指定模型：檔案進資源回收筒，並移除 profile。"""
         model_name = p.get("name", p.get("model", ""))
-        model_file = MODELS_DIR / p["model"]
+        model_path = model_file(p["model"])
         if self.server.running and self.server.profile_name == p.get("name"):
             messagebox.showerror(
                 "無法刪除", f"「{model_name}」正在執行中。請先停止伺服器。",
@@ -2094,11 +2144,11 @@ class LauncherApp:
             return False
 
         size = model_size_text(p["model"]) or "?"
-        files_to_delete = [("主模型", model_file)]
+        files_to_delete = [("主模型", model_path)]
         mmproj_name = p.get("mmproj") or ""
         keep_mmproj_note = ""
         if mmproj_name:
-            mmproj_file = MODELS_DIR / mmproj_name
+            mmproj_file = model_file(mmproj_name)
             shared_by_others = any(
                 sp.get("model") != p["model"] and sp.get("mmproj") == mmproj_name
                 for sp in self.profiles)
@@ -2326,12 +2376,13 @@ class ModelLibraryDialog(tk.Toplevel):
         self.app = app
         self.filtered: list[dict] = []
         self.title("Model Library")
-        self.geometry("780x620")
-        self.minsize(680, 500)
+        win_w, win_h = fit_window_size(self, S(780), S(620))
+        self.geometry(f"{win_w}x{win_h}")
+        self.minsize(*fit_window_size(self, S(680), S(500), screen_ratio=1.0))
         self.configure(bg="#111722")
         self.transient(parent)
 
-        header = tk.Frame(self, bg="#171e2a", height=60)
+        header = tk.Frame(self, bg="#171e2a", height=S(60))
         header.pack(fill="x")
         header.pack_propagate(False)
         tk.Label(header, text="MODEL LIBRARY", font=("Segoe UI", 15, "bold"),
@@ -2490,8 +2541,9 @@ class GlobalSettingsDialog(tk.Toplevel):
         super().__init__(parent)
         self.app = app
         self.title("設定（全域）")
-        self.geometry("560x720")
-        self.minsize(520, 640)
+        win_w, win_h = fit_window_size(self, S(560), S(720))
+        self.geometry(f"{win_w}x{win_h}")
+        self.minsize(*fit_window_size(self, S(520), S(640), screen_ratio=1.0))
         self.resizable(True, True)
         self.transient(parent)
         self.grab_set()
@@ -2649,8 +2701,9 @@ class SettingsDialog(tk.Toplevel):
         self.app = app
         self.profile = profile
         self.title(f"設定 — {profile.get('name','')}")
-        self.geometry("640x560")
-        self.minsize(600, 480)
+        win_w, win_h = fit_window_size(self, S(640), S(560))
+        self.geometry(f"{win_w}x{win_h}")
+        self.minsize(*fit_window_size(self, S(600), S(480), screen_ratio=1.0))
         self.resizable(True, True)
         self.transient(parent)
         self.grab_set()
@@ -2717,7 +2770,7 @@ class SettingsDialog(tk.Toplevel):
             f = filedialog.askopenfilename(
                 initialdir=str(MODELS_DIR), filetypes=[("Vision projector GGUF", "*.gguf")])
             if f:
-                self.mmproj_var.set(Path(f).name)
+                self.mmproj_var.set(relative_model_name(Path(f)))
                 update_vision_toggle(enable_selected=True)
 
         tk.Button(mmproj_row, text="瀏覽…", command=browse_mmproj).pack(
@@ -2931,7 +2984,7 @@ class SettingsDialog(tk.Toplevel):
             return
         mmproj = self.mmproj_var.get().strip()
         mmproj = "" if mmproj == "（無 vision）" else mmproj
-        if mmproj and not (MODELS_DIR / mmproj).exists():
+        if mmproj and not model_file(mmproj).exists():
             messagebox.showerror(
                 "視覺模型不存在",
                 f"找不到 models\\{mmproj}。\n請重新掃描或選擇正確的 GGUF 檔。",
@@ -3006,7 +3059,8 @@ class AddModelDialog(tk.Toplevel):
         super().__init__(parent)
         self.app = app
         self.title("加入新模型")
-        self.geometry("520x470")
+        win_w, win_h = fit_window_size(self, S(520), S(470))
+        self.geometry(f"{win_w}x{win_h}")
         self.resizable(False, False)
         self.transient(parent)
         self.grab_set()
@@ -3034,7 +3088,7 @@ class AddModelDialog(tk.Toplevel):
                 initialdir=str(MODELS_DIR), filetypes=[("GGUF", "*.gguf")])
             if f:
                 self.model_entry.delete(0, "end")
-                self.model_entry.insert(0, Path(f).name)
+                self.model_entry.insert(0, relative_model_name(Path(f)))
         tk.Button(body, text="瀏覽…", command=browse_model).pack(pady=(2, 0), anchor="e")
 
         self.mmproj_entry = field("mmproj 檔 (可留空 = 無 vision)")
@@ -3044,7 +3098,7 @@ class AddModelDialog(tk.Toplevel):
                 initialdir=str(MODELS_DIR), filetypes=[("GGUF", "*.gguf")])
             if f:
                 self.mmproj_entry.delete(0, "end")
-                self.mmproj_entry.insert(0, Path(f).name)
+                self.mmproj_entry.insert(0, relative_model_name(Path(f)))
         tk.Button(body, text="瀏覽…", command=browse_mmproj).pack(pady=(2, 0), anchor="e")
 
         tk.Label(body, text="預設 Context（K）", font=("Segoe UI", 9),
@@ -3095,7 +3149,7 @@ class AddModelDialog(tk.Toplevel):
         if not name or not model:
             messagebox.showwarning("請填完整", "名稱與 GGUF 檔為必填")
             return
-        if not (MODELS_DIR / model).exists():
+        if not model_file(model).exists():
             messagebox.showwarning("檔案不存在",
                                    f"models\\{model} 不存在，請確認檔名")
             return
@@ -3105,7 +3159,7 @@ class AddModelDialog(tk.Toplevel):
             messagebox.showwarning("Context格式錯誤", str(exc), parent=self)
             return
         mmproj = self.mmproj_entry.get().strip()
-        if mmproj and not (MODELS_DIR / mmproj).exists():
+        if mmproj and not model_file(mmproj).exists():
             messagebox.showwarning(
                 "視覺模型不存在", f"models\\{mmproj} 不存在，請確認檔名", parent=self)
             return

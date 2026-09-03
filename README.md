@@ -65,7 +65,7 @@
 
 1. 到本專案的 [Releases](https://github.com/pttocean-afk/llama-launcher/releases)下載 `LlamaLauncher-Setup-x64.exe` 安裝，或解壓 `LlamaLauncher-Portable-x64.zip`
 2. 啟動後選擇**包含 `llama-server.exe` 的資料夾**
-3. 把 GGUF 模型放進它的 `models` 子資料夾
+3. 把 GGUF 模型放進它的 `models` 子資料夾（可自行建立子資料夾分類，例如 `models\Coding\qwen.gguf`，掃描會遞迴讀取）
 4. 選好模型 → 按 **START SERVER**
 
 ### Linux (x86_64)
@@ -244,7 +244,8 @@ GPU split, and remote access are a pain. **Llama Launcher** wraps it all up:
 
 **Windows:** grab `LlamaLauncher-Setup-x64.exe` or `LlamaLauncher-Portable-x64.zip`
 from [Releases](https://github.com/pttocean-afk/llama-launcher/releases). Pick the
-folder containing `llama-server.exe`, drop GGUFs into its `models` subfolder,
+folder containing `llama-server.exe`, drop GGUFs into its `models` subfolder
+(subfolders are scanned recursively, e.g. `models\Coding\qwen.gguf`),
 select a model, press **START SERVER**.
 
 **Linux (x86_64):**

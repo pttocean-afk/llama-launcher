@@ -284,8 +284,11 @@ class PerformanceViewer(tk.Toplevel):
                  llama_dir: Path | str | None = None):
         super().__init__(master)
         self.title("📊 效能分析 — Llama Launcher")
-        self.geometry("1100x800")
-        self.minsize(900, 580)
+        from .ui_scale import DpiScale, S, fit_window_size
+        DpiScale.init(self)
+        win_w, win_h = fit_window_size(self, S(1100), S(800))
+        self.geometry(f"{win_w}x{win_h}")
+        self.minsize(*fit_window_size(self, S(900), S(580), screen_ratio=1.0))
         self.configure(bg=_BG)
         self.logs_dir = Path(logs_dir)
         self.llama_dir = Path(llama_dir) if llama_dir is not None else None
