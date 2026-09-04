@@ -30,6 +30,12 @@ settings.json
 .DS_Store
 Thumbs.db
 
+# Local UI/debug scratch files
+ui-*.png
+*_temp.py
+*_temp.ps1
+debug-*.ps1
+
 # Internal handoff / development notes (not for public repo)
 HANDOFF.md
 DEVELOPMENT_STATUS.md

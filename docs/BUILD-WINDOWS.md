@@ -1,145 +1,103 @@
-# Windows 打包 SOP（本機 WSL → Windows interop）
+# Windows 本機打包 SOP（WSL → Windows）
 
-> 最後驗證：2026-08-31（含 thinking-intensity 功能版）。
-> 用途：每次改版後在**本機**重新壓 Windows 安裝檔，照這份文件依序執行即可，不要重新摸索工具鏈。
-> CI 替代方案：push 到 `main` 或 tag `v*` 會觸發 `.github/workflows/windows-build.yml` 自動建置（見文末注意事項）。
+本專案只正式維護 **Windows 10/11 x64**。這份文件是唯一的本機 release build 流程；不要再手動同步零散檔案或建立第二份 `llama_launcher/`。
 
-## 0. 前置工具鏈（皆已裝好，勿重裝）
+## 一行打包
 
-| 工具 | WSL 路徑 | 版本 |
-|---|---|---|
-| Windows Python（interop 啟動器） | `/mnt/c/Windows/py.exe` | 3.14.2 |
-|   └ 實際執行檔 | `C:\Users\pttoc\AppData\Local\Python\pythoncore-3.14-64\python.exe` | — |
-| PyInstaller（裝在上述 Python 內） | `py.exe -m PyInstaller` | 6.18.0 |
-| Inno Setup 6 | `/mnt/c/Users/pttoc/AppData/Local/Programs/Inno Setup 6/ISCC.exe` | 6.7.3 |
-| PowerShell（interop） | `/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe` | — |
-
-⚠️ **Windows 使用者設定檔資料夾是 `C:\Users\pttoc`**（WSL 的家目錄才是 `/home/pttocean`）。
-找 Inno Setup、Python 位置時，請先找 `pttoc` 底下，不要找 `pttocean`。
-
-測試命令（用於確認環境正常）：
+在 WSL repo 根目錄執行：
 
 ```bash
-/mnt/c/Windows/py.exe --version                          # Python 3.14.2
-/mnt/c/Windows/py.exe -m PyInstaller --version          # 6.18.0
-ls "/mnt/c/Users/pttoc/AppData/Local/Programs/Inno Setup 6/ISCC.exe"
+cd /home/pttocean/projects/llama-launcher
+bash scripts/build-release-windows.sh
 ```
 
-## 1. 打包步驟（依序照抄）
+腳本會依序完成：
 
-以 repo 根目錄為 `$REPO`（WSL：`/home/pttocean/projects/llama-launcher`）。
+1. 刪除並重建乾淨的 `E:\llama-launcher-build`。
+2. 只同步 repo source（排除 `.git`、venv、cache、舊 `build/dist`、spec、egg-info）。
+3. 使用 Windows Python 3.11 安裝 dev 依賴並執行 pytest。
+4. 使用 PyInstaller 建置 Portable app。
+5. 使用 PowerShell 建立 Portable ZIP。
+6. 使用已安裝的 Inno Setup 6 建立 Setup EXE。
+7. 將兩個最終產物複製回 repo 的 `dist/`，列出 SHA-256。
+8. 清除 mirror 裡的 PyInstaller 中間檔、解壓 app、cache 與 egg-info，只保留兩個最終產物。
 
-### 1.1 複製工作樹到 Windows 側 build 目錄
+正式產物：
 
-每次都全新複製，**不要**做差異同步（避免 `__pycache__` / `build` / `dist` 殘留）：
+```text
+dist/LlamaLauncher-Setup-x64.exe
+dist/LlamaLauncher-Portable-x64.zip
+```
+
+同一份產物也會留在：
+
+```text
+E:\llama-launcher-build\dist\LlamaLauncher-Setup-x64.exe
+E:\llama-launcher-build\dist\LlamaLauncher-Portable-x64.zip
+```
+
+若 pytest 已在同一 commit 完整通過，只想重建產物：
 
 ```bash
-cd "$REPO"
-rm -rf /mnt/e/llama-launcher-build
-mkdir -p /mnt/e/llama-launcher-build
-rsync -a \
-  --exclude '.git' --exclude '.venv*' --exclude '__pycache__' \
-  --exclude '.pytest_cache' --exclude 'build' --exclude 'dist' \
-  --exclude '*.pyc' \
-  ./ /mnt/e/llama-launcher-build/
-cd /mnt/e/llama-launcher-build
+bash scripts/build-release-windows.sh --skip-tests
 ```
 
-### 1.2 （僅首次或 pytest 消失時）Windows Python 裝 dev 依賴
+## 前置工具（本機已安裝）
+
+| 工具 | 固定路徑 |
+|---|---|
+| Windows Python 3.11 | `/mnt/c/Users/pttoc/AppData/Local/Programs/Python/Python311/python.exe` |
+| Inno Setup 6 | `/mnt/c/Users/pttoc/AppData/Local/Programs/Inno Setup 6/ISCC.exe` |
+| PowerShell | `/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe` |
+| Windows scratch mirror | `/mnt/e/llama-launcher-build` |
+
+Windows 使用者是 `pttoc`；WSL 使用者才是 `pttocean`。
+
+需要改用其他位置時，可設定：
 
 ```bash
-/mnt/c/Windows/py.exe -m pip install -e ".[dev]"
+LLAMA_LAUNCHER_BUILD_DIR=/mnt/e/other-build \
+LLAMA_LAUNCHER_PYTHON=/mnt/c/path/to/python.exe \
+bash scripts/build-release-windows.sh
 ```
 
-### 1.3 （可選）Windows 側測試
+## 打包前檢查
 
-```bash
-/mnt/c/Windows/py.exe -m pytest -q
-```
+- `pyproject.toml` 的版本與 `installer/LlamaLauncher.iss` 的 `MyAppVersion` 必須一致。
+- `git status --short` 應乾淨；不要把開發中未確認的 UI 直接打包。
+- GitHub Actions `windows-build.yml` 應在相同 commit 全綠。
+- 若 source 測試中的 Launcher 還在執行，先關閉，避免 pip 更新或 port 8765 衝突。
 
-預期：約 118 passed／4 failed，**4 個失敗都是環境性、非程式問題**（清單見 §2），可以直接忽略。
+## 打包後 smoke test
 
-### 1.4 PyInstaller 打包主程式
+至少確認：
 
-注意：`--add-data` 的資料夾分隔符在 Windows 上是 `;`（不是 `:`）。
+1. Portable `LlamaLauncher.exe` 能啟動。
+2. 能讀取 `%LOCALAPPDATA%\LlamaLauncher` 既有 profiles/logs。
+3. 📊 效能分析可開啟能力總覽、速度曲線與 Context/速度取捨。
+4. 取捨圖可用滾輪以游標為中心縮放，並可按住左鍵拖曳。
+5. Setup EXE 可覆蓋安裝並正常啟動。
+6. 關閉程式後 port 8765 已釋放。
 
-```bash
-cd /mnt/e/llama-launcher-build
-/mnt/c/Windows/py.exe -m PyInstaller \
-  --noconfirm --clean --windowed \
-  --name LlamaLauncher \
-  --icon "src/llama_launcher/assets/llama-launcher-icon.ico" \
-  --add-data "src/llama_launcher/assets;assets" \
-  --paths "src" \
-  scripts/launcher_entry.py
-```
+## CI 與 GitHub Release
 
-產出：`dist/LlamaLauncher/`（含 `LlamaLauncher.exe` 與 `_internal/`）。
-成功標記：log 尾端出現 `Build complete! ... E:\llama-launcher-build\dist`。
+- push `master` 或 `v*` tag 會觸發 `.github/workflows/windows-build.yml`。
+- Windows pytest 必須全綠；不接受「環境性失敗可忽略」。
+- CI Test step 已跑過後，建置 step 使用 `scripts/build-windows.ps1 -SkipTests`，避免同一 runner 重複初始化 Tk/Tcl。
+- 建立 release 時使用新 tag，不覆蓋舊 tag；只發布 Windows Setup EXE 與 Portable ZIP。
 
-### 1.5 複製 README 進 Portable 目錄
+## 保留與清理規則
 
-```bash
-cd /mnt/e/llama-launcher-build
-cp README.md dist/LlamaLauncher/README.md
-```
+應保留：
 
-### 1.6 壓 Portable ZIP（用 PowerShell interop）
+- repo source、`.venv-build-sys`（WSL 測試環境）。
+- repo `dist/` 與 mirror `dist/` 內當前版本的 Setup EXE、Portable ZIP。
 
-路徑要用 Windows 格式（`E:\...`），不是 `/mnt/e/...`：
+應刪除／由腳本自動重建：
 
-```bash
-/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command \
-  "Compress-Archive -Path 'E:\llama-launcher-build\dist\LlamaLauncher\*' \
-   -DestinationPath 'E:\llama-launcher-build\dist\LlamaLauncher-Portable-x64.zip' -Force"
-```
+- `build/`、`LlamaLauncher.spec`、`__pycache__/`、`.pytest_cache/`、`*.egg-info/`。
+- `E:\llama-launcher-build\llama_launcher`（錯誤的 root package 副本；正式路徑只有 `src\llama_launcher`）。
+- UI 測試截圖、`*_temp.py`、`*_temp.ps1`。
+- 舊 Linux venv、Linux bundle 與 Linux packaging 檔案。
 
-### 1.7 編譯 Setup EXE（Inno Setup）
-
-```bash
-cd /mnt/e/llama-launcher-build/installer
-"/mnt/c/Users/pttoc/AppData/Local/Programs/Inno Setup 6/ISCC.exe" LlamaLauncher.iss
-```
-
-成功標記：`Successful compile` + `dist/LlamaLauncher-Setup-x64.exe`。
-（`LlamaLauncher.iss` 內用相對路徑 `..\dist\LlamaLauncher\*`，因此必須在 `installer/` 目錄下執行。）
-
-### 1.8 產物複製回 repo 的 `dist/` 並驗證
-
-```bash
-cd "$REPO"
-cp -f /mnt/e/llama-launcher-build/dist/LlamaLauncher-Setup-x64.exe     dist/
-cp -f /mnt/e/llama-launcher-build/dist/LlamaLauncher-Portable-x64.zip  dist/
-ls -la dist/
-file dist/LlamaLauncher-Setup-x64.exe          # 期望: PE32 executable (GUI) ...
-unzip -l dist/LlamaLauncher-Portable-x64.zip   # 期望含 LlamaLauncher.exe + _internal
-```
-
-> `dist/` 已列入 `.gitignore`，產物不入 git；要發布才上傳 GitHub Releases。
-
-## 2. Windows pytest 必須全綠
-
-GitHub Actions 的 Windows runner 是正式驗證環境，測試不應再接受「平台正常失敗」。Linux-only autostart 測試會在 Windows skip；Control API bind failure 使用 deterministic monkeypatch，不依賴 Windows `SO_REUSEADDR` 行為。
-
-Workflow 已有獨立 `Test` step，後續打包使用 `build-windows.ps1 -SkipTests`，避免同一 hosted runner 第二次初始化 Tk/Tcl。手動 release 打包仍可不傳 `-SkipTests`，完整重跑測試。
-
-## 3. 踩過的坑（勿重蹈）
-
-1. **Inno Setup 安裝**
-   - 從 WSL interop 靜默安裝會**假裝成功**（exit 0）但什麼都沒裝（`//VERYSILENT` 參數被吃），不要再試。
-   - 下載要直連 GitHub release：`https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe`；
-     `https://jrsoftware.org/download.php/is.exe` 只會回 HTML 跳轉頁（curl 抓下來不是 exe）。
-   - 安裝後路徑在 `C:\Users\pttoc\AppData\Local\Programs\Inno Setup 6\`（`Compil32.exe`、`ISCC.exe`）。
-2. **`cmd.exe` 不在 WSL PATH**：不要寫 `cmd.exe /c ...`；直接用 interop 執行 `ISCC.exe` 絕對路徑即可。
-3. **使用者資料夾是 `pttoc`**：所有 Windows 側路徑先找 `C:\Users\pttoc`。
-4. **PyInstaller `--add-data` 分隔符**：Windows 用 `;`（`src\...\assets;assets`）；寫成 `:` 會在 Windows 產生物件檔路徑錯誤。
-5. **PowerShell interop 的路徑**要用 `E:\...` 形式；`Compress-Archive` 的 `-Force` 記得加，避免舊檔殘留報錯。
-6. **CI installer 步驟**：`.github/workflows/windows-build.yml` 的 `build-installer.ps1` 需要 Inno Setup 6，但 workflow 目前沒有安裝步驟；若 CI 上 installer 步驟失敗，先在此 workflow 加 `winget install JRSoftware.InnoSetup`（或等價步驟），本機打包不受影響。
-
-## 4. 相關檔案
-
-- `scripts/build-windows.ps1` — CI/Windows 本機用的 PyInstaller + ZIP 腳本（本 SOP 與之等價）
-- `scripts/build-installer.ps1` — Inno Setup 編譯腳本
-- `installer/LlamaLauncher.iss` — Inno 安裝腳本（AppId/名稱/Reg 設定）
-- `.github/workflows/windows-build.yml` — push `master` / tag `v*` 自動測試與建置
-- Linux workflow 與打包腳本已停止維護並移除
+不要再使用 `rsync src/ ...`：尾端斜線會把 `src/llama_launcher` 錯放成 mirror root 的 `llama_launcher/`。只允許由 canonical script 同步完整 repo 根目錄。

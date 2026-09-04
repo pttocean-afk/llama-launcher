@@ -25,28 +25,25 @@ Windows GitHub Actions（`.github/workflows/windows-build.yml`）也必須成功
 
 ## 2. Windows 本機打包
 
-完整 WSL→Windows interop 與 Inno Setup 細節見 [BUILD-WINDOWS.md](BUILD-WINDOWS.md)。核心流程：
+先確認 `pyproject.toml` 與 `installer/LlamaLauncher.iss` 的版本一致，然後只執行 canonical script：
 
 ```bash
 cd /home/pttocean/projects/llama-launcher
-rsync -a --delete \
-  --exclude '.git' --exclude '.venv*' --exclude '__pycache__' \
-  --exclude '.pytest_cache' --exclude 'build' --exclude 'dist' --exclude '*.pyc' \
-  ./ /mnt/e/llama-launcher-build/
-
-cd /mnt/e/llama-launcher-build
-/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile \
-  -ExecutionPolicy Bypass -File 'E:\llama-launcher-build\scripts\build-windows.ps1'
-/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile \
-  -ExecutionPolicy Bypass -File 'E:\llama-launcher-build\scripts\build-installer.ps1'
+bash scripts/build-release-windows.sh
 ```
 
-產物：
+若相同 commit 已完整測試，可使用：
+
+```bash
+bash scripts/build-release-windows.sh --skip-tests
+```
+
+腳本會從乾淨的 Windows mirror 建置、清理中間檔，並把最終產物複製回 repo：
 
 - `dist/LlamaLauncher-Portable-x64.zip`
 - `dist/LlamaLauncher-Setup-x64.exe`
 
-若 CI 的獨立 Test step 已經完成，build script 可使用 `-SkipTests`；正式手動 release 預設不要跳過。
+不要手動 `rsync src/`、逐檔複製 package 或保留第二份 root `llama_launcher/`。完整工具路徑與除錯規則見 [BUILD-WINDOWS.md](BUILD-WINDOWS.md)。
 
 ## 3. 打包後 smoke test
 

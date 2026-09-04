@@ -127,14 +127,13 @@ python3 -m venv .venv
 .\scripts\run-dev-windows.ps1
 ```
 
-**Windows build**
+**Windows 本機 release build（WSL，一個指令）**
 
-```powershell
-.\scripts\build-windows.ps1
-.\scripts\build-installer.ps1
+```bash
+bash scripts/build-release-windows.sh
 ```
 
-> 本機手動打包的完整 SOP（WSL→Windows interop：Python/PyInstaller/Inno Setup 路徑、逐條指令、踩坑清單）見 [docs/BUILD-WINDOWS.md](docs/BUILD-WINDOWS.md)。
+> 腳本會重建乾淨 mirror、測試、打包、清理中間檔，並只保留 Setup EXE 與 Portable ZIP。完整 SOP 見 [docs/BUILD-WINDOWS.md](docs/BUILD-WINDOWS.md)。
 >
 > Windows 打包與 GitHub Release 上傳流程見 [docs/RELEASING.md](docs/RELEASING.md)。
 
@@ -287,15 +286,14 @@ python3 -m venv .venv
 .\scripts\run-dev-windows.ps1
 ```
 
-**Windows build**
+**Local Windows release build (one WSL command)**
 
-```powershell
-.\scripts\build-windows.ps1
-.\scripts\build-installer.ps1
+```bash
+bash scripts/build-release-windows.sh
 ```
 
-> Manual local packaging SOP (WSL→Windows interop: Python/PyInstaller/Inno Setup
-> paths, exact commands, and known pitfalls) — see [docs/BUILD-WINDOWS.md](docs/BUILD-WINDOWS.md).
+> The script recreates a clean mirror, tests, packages, removes intermediates,
+> and keeps only Setup EXE plus Portable ZIP. See [docs/BUILD-WINDOWS.md](docs/BUILD-WINDOWS.md).
 >
 > Windows packaging and GitHub Release publishing flow:
 > see [docs/RELEASING.md](docs/RELEASING.md).
