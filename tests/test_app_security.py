@@ -107,9 +107,18 @@ def test_remote_start_rejects_unknown_model(app_mod):
 
 
 def test_control_server_bind_failure_is_observable(app_mod, monkeypatch):
-    """LauncherApp with an occupied control port must log and expose the failure."""
-    blocker = app_mod.ControlServer(_make_app(app_mod))
-    blocker.start()
+    """LauncherApp with an occupied control port must log and expose the failure.
+
+    不依賴「先佔 port 讓第二次 bind 失敗」：Windows 的 SO_REUSEADDR 語意
+    允許同一 port 重複綁定，不會像 Linux 拋 EADDRINUSE。改成攔截
+    ControlServer 建構直接拋 OSError，驗證 LauncherApp 的錯誤處理路徑
+    （跨平台一致，也避免殘留 server 污染其他測試）。
+    """
+    def _bind_failure(*_args, **_kwargs):
+        raise OSError(
+            f"error while attempting to bind on address "
+            f"('127.0.0.1', {app_mod.CONTROL_PORT}): [WinError 10048]")
+    monkeypatch.setattr(app_mod.ControlServer, "__init__", _bind_failure)
     logs = []
     handler = _CollectingHandler(logs)
     logger = app_mod.logging.getLogger("llama_launcher")
@@ -129,7 +138,6 @@ def test_control_server_bind_failure_is_observable(app_mod, monkeypatch):
     finally:
         logger.removeHandler(handler)
         logger.setLevel(0)
-        blocker.close()
 
 
 class _CollectingHandler(logging.Handler):

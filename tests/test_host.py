@@ -1,4 +1,7 @@
+import sys
 from pathlib import Path
+
+import pytest
 
 from llama_launcher.host import command_uses_port, llama_server_filename
 
@@ -14,6 +17,8 @@ def test_platform_server_filename():
     assert llama_server_filename() in {"llama-server", "llama-server.exe"}
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="Linux-only: sets ~/.config/autostart desktop file")
 def test_autostart_toggle(tmp_path, monkeypatch):
     """Linux autostart writes/removes ~/.config/autostart/llama-launcher.desktop."""
     import llama_launcher.host as host
