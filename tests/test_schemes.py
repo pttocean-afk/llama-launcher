@@ -238,6 +238,24 @@ def test_persist_legacy_profile_maps_to_default_scheme(app_mod):
     assert app.cfg["profiles"][0]["scheme"] == "預設"
 
 
+def test_settings_dialog_rename_replaces_old_scheme(app_mod, monkeypatch):
+    """一般儲存改方案名＝重新命名，不應殘留舊方案副本。"""
+    app = _make_app(app_mod, [
+        _profile(scheme="預設"),
+        _profile(scheme="chat"),
+    ])
+    monkeypatch.setattr(app_mod, "save_config", lambda cfg: None)
+    monkeypatch.setattr(app_mod, "merge_profiles",
+                        lambda cfg: [dict(p) for p in cfg["profiles"]])
+    dialog = app_mod.SettingsDialog.__new__(app_mod.SettingsDialog)
+    dialog.app = app
+    renamed = _profile(scheme="code", default_ctx=32768)
+    dialog._persist_to_cfg(renamed, replace_key=("a.gguf", "預設"))
+    schemes = {p["scheme"] for p in app.cfg["profiles"]}
+    assert schemes == {"code", "chat"}
+    assert len(app.cfg["profiles"]) == 2
+
+
 # ---------------------------------------------------------------- 設定匯出
 def test_export_import_roundtrip_with_schemes(app_mod, tmp_path):
     from llama_launcher.profiles import export_profiles, read_export

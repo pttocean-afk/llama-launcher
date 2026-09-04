@@ -173,6 +173,14 @@ def update_llama_dir(new_dir: str) -> bool:
 NVIDIA_SMI = nvidia_smi_path()
 VRAM_PREFLIGHT_WAIT_SECONDS = 10
 VRAM_PREFLIGHT_MODES = ("off", "warn", "strict")
+VRAM_PREFLIGHT_MODE_LABELS = {
+    "off": "關閉",
+    "warn": "只警告",
+    "strict": "嚴格",
+}
+VRAM_PREFLIGHT_MODE_VALUES = {
+    label: mode for mode, label in VRAM_PREFLIGHT_MODE_LABELS.items()
+}
 VRAM_CLEANUP_PROCESS_NAMES = [
     "NVIDIA Overlay.exe",
     "nvsphelper64.exe",
@@ -2638,30 +2646,36 @@ class GlobalSettingsDialog(tk.Toplevel):
         super().__init__(parent)
         self.app = app
         self.title("設定（全域）")
-        win_w, win_h = fit_window_size(self, S(620), S(760))
+        win_w, win_h = fit_window_size(self, S(660), S(590))
         self.geometry(f"{win_w}x{win_h}")
-        self.minsize(*fit_window_size(self, S(540), S(640), screen_ratio=1.0))
+        self.minsize(*fit_window_size(self, S(580), S(500), screen_ratio=1.0))
         self.resizable(True, True)
         self.transient(parent)
         self.grab_set()
 
-        # 可捲動內容區（新增區塊後高度不夠時不會擠掉按鈕）
-        outer = tk.Frame(self)
-        outer.pack(side="top", fill="both", expand=True)
-        canvas = tk.Canvas(outer, highlightthickness=0)
-        vsb = tk.Scrollbar(outer, orient="vertical", command=canvas.yview)
-        body = tk.Frame(canvas, padx=18, pady=14)
-        canvas.create_window((0, 0), window=body, anchor="nw")
-        body.bind("<Configure>",
-                  lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.pack(side="left", fill="both", expand=True)
-        vsb.pack(side="right", fill="y")
-
-        tk.Label(body, text="全域設定",
+        header = tk.Frame(self, padx=18)
+        header.pack(side="top", fill="x", pady=(14, 8))
+        tk.Label(header, text="全域設定",
                  font=("Segoe UI", 13, "bold")).pack(anchor="w")
-        tk.Label(body, text="這些設定影響整個 launcher，與個別模型無關。",
-                 font=("Segoe UI", 9), fg="#888").pack(anchor="w", pady=(2, 10))
+        tk.Label(header, text="這些設定影響整個 launcher，與個別模型無關。",
+                 font=("Segoe UI", 9), fg="#888").pack(anchor="w", pady=(2, 0))
 
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(side="top", fill="both", expand=True, padx=12)
+        tab_general = tk.Frame(self.notebook, padx=18, pady=14)
+        tab_server = tk.Frame(self.notebook, padx=18, pady=14)
+        tab_vram = tk.Frame(self.notebook, padx=18, pady=14)
+        tab_tools = tk.Frame(self.notebook, padx=18, pady=14)
+        self.global_tabs = {
+            "一般": tab_general,
+            "伺服器": tab_server,
+            "VRAM 預檢": tab_vram,
+            "工具與資料": tab_tools,
+        }
+        for title, tab in self.global_tabs.items():
+            self.notebook.add(tab, text=title)
+
+        body = tab_general
         # ---- llama.cpp 資料夾
         tk.Label(body, text="llama.cpp 資料夾位置",
                  font=("Segoe UI", 10, "bold")).pack(anchor="w")
@@ -2682,6 +2696,7 @@ class GlobalSettingsDialog(tk.Toplevel):
                   padx=10, pady=3).pack(side="left", padx=(6, 0))
         tk.Frame(body, height=1, bg="#ddd").pack(fill="x", pady=12)
 
+        body = tab_server
         # ---- 伺服器（host / port / alias / api-key）
         server = _load_settings().get("server") or {}
         tk.Label(body, text="伺服器", font=("Segoe UI", 10, "bold")).pack(anchor="w")
@@ -2718,8 +2733,9 @@ class GlobalSettingsDialog(tk.Toplevel):
         self.api_key_entry.pack(side="left", fill="x", expand=True, padx=(6, 4))
         key_status = ("已設定（%s…%s）" % (existing_key[:4], existing_key[-4:])) \
             if len(existing_key) >= 8 else ("已設定" if existing_key else "未設定")
-        tk.Label(key_row, text=f"目前：{key_status}", font=("Segoe UI", 8),
-                 fg="#888").pack(side="left")
+        self.api_key_status_var = tk.StringVar(value=f"目前：{key_status}")
+        tk.Label(key_row, textvariable=self.api_key_status_var,
+                 font=("Segoe UI", 8), fg="#888").pack(side="left")
         tk.Button(key_row, text="清除", command=self._clear_api_key,
                   font=("Segoe UI", 8)).pack(side="left", padx=(4, 0))
         tk.Label(body, text="API Key 留空＝維持目前值；填入新值＝覆蓋。"
@@ -2728,6 +2744,7 @@ class GlobalSettingsDialog(tk.Toplevel):
                  wraplength=560, justify="left").pack(anchor="w", pady=(2, 0))
         tk.Frame(body, height=1, bg="#ddd").pack(fill="x", pady=12)
 
+        body = tab_vram
         # ---- VRAM 預檢
         pf = vram_preflight_config()
         tk.Label(body, text="VRAM 預檢（GPU 啟動前）", font=("Segoe UI", 10,
@@ -2735,16 +2752,18 @@ class GlobalSettingsDialog(tk.Toplevel):
         tk.Label(body, text="預設關閉。需要乾淨顯存基線（例如固定層數分配）的機器"
                             "可開嚴格模式。",
                  font=("Segoe UI", 8), fg="#888").pack(anchor="w", pady=(1, 4))
+        mode = pf["mode"] if pf["mode"] in VRAM_PREFLIGHT_MODES else "off"
         self.preflight_var = tk.StringVar(
-            value=pf["mode"] if pf["mode"] in VRAM_PREFLIGHT_MODES else "off")
+            value=VRAM_PREFLIGHT_MODE_LABELS[mode])
         pf_row = tk.Frame(body)
         pf_row.pack(fill="x")
         tk.Label(pf_row, text="模式：", font=("Segoe UI", 9)).pack(side="left")
-        ttk.Combobox(pf_row, textvariable=self.preflight_var,
-                     values=["off", "warn", "strict"], state="readonly",
-                     width=8).pack(side="left", padx=(4, 12))
-        tk.Label(pf_row, text="off＝不檢查；warn＝超標只警告；"
-                              "strict＝清理+超時擋住",
+        ttk.Combobox(
+            pf_row, textvariable=self.preflight_var,
+            values=list(VRAM_PREFLIGHT_MODE_VALUES), state="readonly",
+            width=10).pack(side="left", padx=(4, 12))
+        tk.Label(pf_row, text="關閉＝不檢查；只警告＝超標仍啟動；"
+                              "嚴格＝清理後超時擋住",
                  font=("Segoe UI", 8), fg="#888").pack(side="left")
         self.preflight_limits_var = tk.StringVar(
             value=",".join(str(v) for v in pf["gpu_limits_mb"]
@@ -2780,8 +2799,9 @@ class GlobalSettingsDialog(tk.Toplevel):
                  font=("Consolas", 9)).pack(side="left", padx=(4, 0))
         tk.Frame(body, height=1, bg="#ddd").pack(fill="x", pady=12)
 
+        body = tab_server
         # ---- 其他（RAM cache / Vulkan 裝置）
-        tk.Label(body, text="其他", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        tk.Label(body, text="執行資源", font=("Segoe UI", 10, "bold")).pack(anchor="w")
         other_grid = tk.Frame(body)
         other_grid.pack(fill="x", pady=(4, 0))
         self.cache_ram_var = tk.StringVar(
@@ -2799,6 +2819,7 @@ class GlobalSettingsDialog(tk.Toplevel):
                  font=("Consolas", 9)).grid(row=1, column=1, sticky="w", padx=(4, 0))
         tk.Frame(body, height=1, bg="#ddd").pack(fill="x", pady=12)
 
+        body = tab_general
         # ---- 隨開機啟動
         tk.Label(body, text="啟動行為", font=("Segoe UI", 10, "bold")).pack(anchor="w")
         self.autostart_var = tk.BooleanVar(value=autostart_enabled())
@@ -2814,6 +2835,7 @@ class GlobalSettingsDialog(tk.Toplevel):
             font=("Segoe UI", 9)).pack(fill="x", pady=(2, 0))
         tk.Frame(body, height=1, bg="#ddd").pack(fill="x", pady=12)
 
+        body = tab_tools
         # ---- Remote access
         tk.Label(body, text="遠端控制", font=("Segoe UI", 10, "bold")).pack(anchor="w")
         tk.Label(body, text="透過 Tailscale 從手機／其他電腦控制 llama-server。",
@@ -2872,6 +2894,7 @@ class GlobalSettingsDialog(tk.Toplevel):
         self.api_key_var.set("")
         self._api_key_existing = ""
         self._api_key_dirty = True
+        self.api_key_status_var.set("目前：將於儲存時清除")
 
     def _reload_presets(self):
         self.preset_list.delete(0, "end")
@@ -2917,12 +2940,22 @@ class GlobalSettingsDialog(tk.Toplevel):
             messagebox.showerror("Port 格式錯誤",
                                  "Port 請輸入 1～65535 的整數。", parent=self)
             return
+        try:
+            cache_ram_mb = int(
+                self.cache_ram_var.get().strip() or DEFAULT_CACHE_RAM_MB)
+            if cache_ram_mb < 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror(
+                "RAM cache 格式錯誤",
+                "RAM prompt cache 請輸入 0 以上的整數 MB。", parent=self)
+            return
         settings = _load_settings()
         settings["server"] = {
             "host": self.host_var.get().strip() or DEFAULT_HOST,
             "port": port,
             "alias": self.alias_var.get().strip(),
-            "cache_ram_mb": self.cache_ram_var.get().strip() or DEFAULT_CACHE_RAM_MB,
+            "cache_ram_mb": cache_ram_mb,
             "vulkan_devices": self.vulkan_devices_var.get().strip(),
         }
         # VRAM 預檢
@@ -2939,7 +2972,8 @@ class GlobalSettingsDialog(tk.Toplevel):
                     "上限請用逗號分隔的整數 MB，例如 2304,128。", parent=self)
                 return
         settings["vram_preflight"] = {
-            "mode": self.preflight_var.get(),
+            "mode": VRAM_PREFLIGHT_MODE_VALUES.get(
+                self.preflight_var.get(), "off"),
             "gpu_limits_mb": limits,
             "kill_processes": [line.strip()
                                for line in self.preflight_procs_text.get(
@@ -3464,11 +3498,12 @@ class SettingsDialog(tk.Toplevel):
         if getattr(self, "preview_text", None) is None or not self.preview_text.winfo_exists():
             return
         p = self._collect_fields(silent=True)
-        binary = VULKAN_SERVER if p.get("backend") == "vulkan" else LLAMA_SERVER
         if p is None:
             text = "（Context 欄位格式有誤，無法組裝預覽）"
         else:
             try:
+                binary = (VULKAN_SERVER if p.get("backend") == "vulkan"
+                          else LLAMA_SERVER)
                 ctx = parse_context_k(self.ctx_var.get())
                 mmproj = model_file(p["mmproj"]) if p.get("mmproj") else None
                 args = build_server_args(
@@ -3501,7 +3536,9 @@ class SettingsDialog(tk.Toplevel):
                     parent=self)
                 return
         p["scheme"] = scheme
-        self._persist_to_cfg(p)
+        # 一般「儲存」若改了方案名，應重新命名目前方案，不是複製一份；
+        # 要保留舊方案請用「另存新方案」。
+        self._persist_to_cfg(p, replace_key=self.original_key)
         self.original_key = new_key
         self.app.refresh_listbox(new_key)
         self.app.update_detail()
@@ -3541,8 +3578,8 @@ class SettingsDialog(tk.Toplevel):
         self.app.update_detail()
         messagebox.showinfo("已建立", f"已建立新方案「{scheme}」，可繼續調整。")
 
-    def _persist_to_cfg(self, p: dict):
-        key = profile_key(p)
+    def _persist_to_cfg(self, p: dict, replace_key=None):
+        key = tuple(replace_key) if replace_key is not None else profile_key(p)
         cfg = self.app.cfg
         cfg.setdefault("profiles", [])
         for i, sp in enumerate(cfg["profiles"]):

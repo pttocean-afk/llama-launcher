@@ -247,6 +247,12 @@ def test_vulkan_device_list():
     unknown = build_server_args(_profile(backend="vulkan"), 4096,
                                 _settings(), "/models/a.gguf")
     assert has_seq(unknown, ["--device", "Vulkan0"])
+    configured = build_server_args(
+        _profile(backend="vulkan"), 4096,
+        _settings(vulkan_devices="Vulkan1"), "/models/a.gguf",
+        vulkan_gpu_count=2)
+    assert has_seq(configured, ["--device", "Vulkan1"])
+    assert "Vulkan0,Vulkan1" not in configured
     cuda = _args(_profile(backend="cuda"))
     assert "--device" not in cuda
 

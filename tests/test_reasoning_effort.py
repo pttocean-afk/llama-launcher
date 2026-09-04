@@ -252,3 +252,28 @@ def test_add_model_dialog_defaults(app_mod, monkeypatch):
                 dlg.destroy()
     finally:
         root.destroy()
+
+
+def test_settings_preview_handles_invalid_context(app_mod):
+    """欄位收集失敗時預覽應顯示提示，不得先對 None 呼叫 get。"""
+    class Preview:
+        def __init__(self):
+            self.value = ""
+
+        def winfo_exists(self):
+            return True
+
+        def config(self, **_kwargs):
+            pass
+
+        def delete(self, *_args):
+            self.value = ""
+
+        def insert(self, _where, text):
+            self.value += text
+
+    dialog = app_mod.SettingsDialog.__new__(app_mod.SettingsDialog)
+    dialog.preview_text = Preview()
+    dialog._collect_fields = lambda silent=False: None
+    dialog._update_preview()
+    assert "Context 欄位格式有誤" in dialog.preview_text.value

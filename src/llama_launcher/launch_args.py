@@ -264,7 +264,10 @@ def build_server_args(
 
     backend = str(profile.get("backend", "cuda")).strip().lower()
     if backend == "vulkan":
-        args += ["--device", vulkan_device_list(vulkan_gpu_count)]
+        configured_devices = str(
+            server_settings.get("vulkan_devices") or "").strip()
+        args += ["--device", configured_devices or
+                 vulkan_device_list(vulkan_gpu_count)]
     gpu_split = str(profile.get("gpu_split") or "").strip()
     if gpu_split:
         args += ["-ts", gpu_split]
