@@ -1,5 +1,5 @@
 #define MyAppName "Llama Launcher"
-#define MyAppVersion "0.4.0"
+#define MyAppVersion "0.4.1"
 #define MyAppPublisher "Llama Launcher contributors"
 #define MyAppExeName "LlamaLauncher.exe"
 
@@ -12,7 +12,7 @@ DefaultDirName={localappdata}\Programs\LlamaLauncher
 DefaultGroupName={#MyAppName}
 PrivilegesRequired=lowest
 OutputDir=..\dist
-OutputBaseFilename=LlamaLauncher-Setup-x64
+OutputBaseFilename=LlamaLauncher-Setup-{#MyAppVersion}-x64
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern

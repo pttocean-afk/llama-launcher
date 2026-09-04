@@ -40,8 +40,12 @@ bash scripts/build-release-windows.sh --skip-tests
 
 腳本會從乾淨的 Windows mirror 建置、清理中間檔，並把最終產物複製回 repo：
 
-- `dist/LlamaLauncher-Portable-x64.zip`
-- `dist/LlamaLauncher-Setup-x64.exe`
+- `dist/LlamaLauncher-Portable-X.Y.Z-x64.zip`
+- `dist/LlamaLauncher-Setup-X.Y.Z-x64.exe`
+
+**發行檔名必須含完整版號，且不得覆蓋既有版本。** 若同版號產物已存在，
+打包腳本必須停止；先增加版本號再重打。上一版需保留供回滾。完整守則見
+根目錄 [DEVELOPMENT.md](../DEVELOPMENT.md)。
 
 不要手動 `rsync src/`、逐檔複製 package 或保留第二份 root `llama_launcher/`。完整工具路徑與除錯規則見 [BUILD-WINDOWS.md](BUILD-WINDOWS.md)。
 
@@ -74,8 +78,8 @@ git push origin "$VERSION"
 
 ```bash
 for u in \
-  https://github.com/pttocean-afk/llama-launcher/releases/download/vX.Y.Z/LlamaLauncher-Setup-x64.exe \
-  https://github.com/pttocean-afk/llama-launcher/releases/download/vX.Y.Z/LlamaLauncher-Portable-x64.zip ; do
+  https://github.com/pttocean-afk/llama-launcher/releases/download/vX.Y.Z/LlamaLauncher-Setup-X.Y.Z-x64.exe \
+  https://github.com/pttocean-afk/llama-launcher/releases/download/vX.Y.Z/LlamaLauncher-Portable-X.Y.Z-x64.zip ; do
   curl -sL -o /dev/null -w "%{http_code} $u\n" "$u"
 done
 ```

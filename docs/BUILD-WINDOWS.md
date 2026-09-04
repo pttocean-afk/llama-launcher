@@ -22,19 +22,22 @@ bash scripts/build-release-windows.sh
 7. 將兩個最終產物複製回 repo 的 `dist/`，列出 SHA-256。
 8. 清除 mirror 裡的 PyInstaller 中間檔、解壓 app、cache 與 egg-info，只保留兩個最終產物。
 
-正式產物：
+正式產物（`X.Y.Z` 為 `pyproject.toml` 版本）：
 
 ```text
-dist/LlamaLauncher-Setup-x64.exe
-dist/LlamaLauncher-Portable-x64.zip
+dist/LlamaLauncher-Setup-X.Y.Z-x64.exe
+dist/LlamaLauncher-Portable-X.Y.Z-x64.zip
 ```
 
 同一份產物也會留在：
 
 ```text
-E:\llama-launcher-build\dist\LlamaLauncher-Setup-x64.exe
-E:\llama-launcher-build\dist\LlamaLauncher-Portable-x64.zip
+E:\llama-launcher-build\dist\LlamaLauncher-Setup-X.Y.Z-x64.exe
+E:\llama-launcher-build\dist\LlamaLauncher-Portable-X.Y.Z-x64.zip
 ```
+
+> 發行檔名必須包含版號，而且既有產物不可覆蓋。若同版號檔案已存在，
+> 腳本會停止；請先增加版本號。完整規則見根目錄 `DEVELOPMENT.md`。
 
 若 pytest 已在同一 commit 完整通過，只想重建產物：
 

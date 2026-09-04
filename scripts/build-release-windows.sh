@@ -21,6 +21,18 @@ INSTALLER_VERSION="$(sed -n 's/^#define MyAppVersion "\([^"]*\)"/\1/p' "$REPO/in
   echo "Version mismatch: pyproject=$PROJECT_VERSION installer=$INSTALLER_VERSION" >&2
   exit 1
 }
+SETUP_NAME="LlamaLauncher-Setup-${PROJECT_VERSION}-x64.exe"
+PORTABLE_NAME="LlamaLauncher-Portable-${PROJECT_VERSION}-x64.zip"
+
+# Release artifacts are immutable: every filename carries the version and an
+# existing release is never overwritten. Bump the version before rebuilding.
+for artifact in "$SETUP_NAME" "$PORTABLE_NAME"; do
+  [[ ! -e "$REPO/dist/$artifact" ]] || {
+    echo "Refusing to overwrite existing release artifact: $REPO/dist/$artifact" >&2
+    echo "Bump pyproject.toml and installer/LlamaLauncher.iss first." >&2
+    exit 1
+  }
+done
 
 # The mirror is disposable. Recreate it to prevent duplicate package trees,
 # stale __pycache__, PyInstaller specs, and old build/dist files.
@@ -47,17 +59,15 @@ fi
 
 cp README.md dist/LlamaLauncher/README.md
 "$POWERSHELL" -NoProfile -Command \
-  "Compress-Archive -Path '$MIRROR_WIN\\dist\\LlamaLauncher\\*' -DestinationPath '$MIRROR_WIN\\dist\\LlamaLauncher-Portable-x64.zip' -Force"
+  "Compress-Archive -Path '$MIRROR_WIN\\dist\\LlamaLauncher\\*' -DestinationPath '$MIRROR_WIN\\dist\\$PORTABLE_NAME' -Force"
 (
   cd "$MIRROR/installer"
   "$ISCC" LlamaLauncher.iss
 )
 
 mkdir -p "$REPO/dist"
-rm -f "$REPO/dist/LlamaLauncher-Setup-x64.exe" \
-      "$REPO/dist/LlamaLauncher-Portable-x64.zip"
-cp "$MIRROR/dist/LlamaLauncher-Setup-x64.exe" "$REPO/dist/"
-cp "$MIRROR/dist/LlamaLauncher-Portable-x64.zip" "$REPO/dist/"
+cp "$MIRROR/dist/$SETUP_NAME" "$REPO/dist/$SETUP_NAME"
+cp "$MIRROR/dist/$PORTABLE_NAME" "$REPO/dist/$PORTABLE_NAME"
 
 # Keep only final distributables in the disposable mirror.
 rm -rf "$MIRROR/build" "$MIRROR/dist/LlamaLauncher" "$MIRROR/LlamaLauncher.spec"
@@ -65,8 +75,8 @@ find "$MIRROR" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$MIRROR" -type d -name '*.egg-info' -prune -exec rm -rf {} +
 
 printf '\nBuild complete (version %s):\n' "$PROJECT_VERSION"
-sha256sum "$REPO/dist/LlamaLauncher-Setup-x64.exe" \
-          "$REPO/dist/LlamaLauncher-Portable-x64.zip"
+sha256sum "$REPO/dist/$SETUP_NAME" \
+          "$REPO/dist/$PORTABLE_NAME"
 printf '\nArtifacts:\n  %s\n  %s\n' \
-  "$REPO/dist/LlamaLauncher-Setup-x64.exe" \
-  "$REPO/dist/LlamaLauncher-Portable-x64.zip"
+  "$REPO/dist/$SETUP_NAME" \
+  "$REPO/dist/$PORTABLE_NAME"
