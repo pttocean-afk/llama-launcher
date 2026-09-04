@@ -12,6 +12,8 @@ from llama_launcher.log_analysis import parse_log_file
 FIXTURES = Path(__file__).parent / "fixtures" / "logs"
 
 
+from conftest import require_display
+
 def test_context_label():
     assert format_context(131072) == "128K"
     assert format_context(200000) == "200K"
@@ -19,6 +21,7 @@ def test_context_label():
 
 
 def test_capability_viewer_scans_and_renders():
+    require_display()
     root = tk.Tk()
     root.withdraw()
     viewer = CapabilityViewer(root, FIXTURES)

@@ -11,6 +11,8 @@ import threading
 import pytest
 
 
+from conftest import require_display
+
 def _import_app(tmp_path, monkeypatch):
     """Import llama_launcher.app with an isolated data and model dir
     (same isolation as tests/test_app_security.py)."""
@@ -184,6 +186,7 @@ def _fake_app(app_mod, profile):
 
 
 def test_settings_dialog_saves_reasoning_effort(app_mod, monkeypatch):
+    require_display()
     monkeypatch.setattr(app_mod.messagebox, "showinfo", lambda *a, **k: None)
     monkeypatch.setattr(app_mod.messagebox, "showerror", lambda *a, **k: None)
     profile = _base_profile(reasoning="on")
@@ -210,6 +213,7 @@ def test_settings_dialog_saves_reasoning_effort(app_mod, monkeypatch):
 
 
 def test_settings_dialog_disables_effort_when_thinking_off(app_mod, monkeypatch):
+    require_display()
     monkeypatch.setattr(app_mod.messagebox, "showinfo", lambda *a, **k: None)
     monkeypatch.setattr(app_mod.messagebox, "showerror", lambda *a, **k: None)
     profile = _base_profile(reasoning="off", reasoning_effort="high")
@@ -231,6 +235,7 @@ def test_settings_dialog_disables_effort_when_thinking_off(app_mod, monkeypatch)
 
 
 def test_add_model_dialog_defaults(app_mod, monkeypatch):
+    require_display()
     monkeypatch.setattr(app_mod.messagebox, "showinfo", lambda *a, **k: None)
     monkeypatch.setattr(app_mod.messagebox, "showwarning", lambda *a, **k: None)
     app = _fake_app(app_mod, _base_profile())

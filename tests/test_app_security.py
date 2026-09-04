@@ -10,6 +10,8 @@ from urllib.request import Request, urlopen
 import pytest
 
 
+from conftest import require_display
+
 def _import_app(tmp_path, monkeypatch):
     """Import llama_launcher.app with an isolated data dir and empty model dir."""
     monkeypatch.setenv("LLAMA_LAUNCHER_DATA_DIR", str(tmp_path / "data"))
@@ -114,6 +116,7 @@ def test_control_server_bind_failure_is_observable(app_mod, monkeypatch):
     ControlServer 建構直接拋 OSError，驗證 LauncherApp 的錯誤處理路徑
     （跨平台一致，也避免殘留 server 污染其他測試）。
     """
+    require_display()
     def _bind_failure(*_args, **_kwargs):
         raise OSError(
             f"error while attempting to bind on address "
