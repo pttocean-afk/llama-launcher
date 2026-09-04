@@ -171,3 +171,36 @@ def test_merge_imported_ignores_empty_model():
     merged, added, updated = merge_imported(current, imported)
     assert added == 0
     assert len(merged) == 1
+
+
+def test_merge_imported_same_model_different_scheme_added():
+    """同一模型的不同方案是新增，不是覆蓋。"""
+    current = [_profile("A", "a.gguf", scheme="預設", default_ctx=131072)]
+    imported = [_profile("A", "a.gguf", scheme="code", default_ctx=32768)]
+    merged, added, updated = merge_imported(current, imported)
+    assert added == 1
+    assert updated == 0
+    assert len(merged) == 2
+    a = next(p for p in merged if p.get("scheme") == "預設")
+    assert a["default_ctx"] == 131072
+
+
+def test_merge_imported_legacy_no_scheme_maps_to_default():
+    """舊匯出檔沒有 scheme 欄位 → 當成「預設」方案合併。"""
+    current = [_profile("A", "a.gguf", scheme="預設", default_ctx=262144)]
+    imported = [{"name": "A", "model": "a.gguf", "default_ctx": 131072}]
+    merged, added, updated = merge_imported(current, imported)
+    assert added == 0
+    assert updated == 0  # 沒有新欄位可補
+    assert len(merged) == 1
+    assert merged[0]["default_ctx"] == 262144
+
+
+def test_export_keeps_scheme_field():
+    p = _profile("A", "a.gguf", scheme="code", spec_draft_n_max="5",
+                 flash_attn="on", raw_args="--port 8081")
+    out = export_profiles([p])
+    assert out["profiles"][0]["scheme"] == "code"
+    assert out["profiles"][0]["spec_draft_n_max"] == "5"
+    assert out["profiles"][0]["flash_attn"] == "on"
+    assert out["profiles"][0]["raw_args"] == "--port 8081"

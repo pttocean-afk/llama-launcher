@@ -9,17 +9,36 @@ from pathlib import Path
 PORTABLE_FIELDS = (
     "name",
     "model",          # relative filename inside models/
+    "scheme",         # 啟動方案（同一模型可有多個，如 預設 / code / chat）
     "mmproj",         # relative filename, may be empty
     "vision_enabled",
     "default_ctx",
-    "reasoning",      # "on" / "off"
+    "reasoning",      # "on" / "off" / "auto"
     "reasoning_effort",  # "default" / "minimal" / "low" / "medium" / "high" / "xhigh" / "max"
+    "reasoning_format",  # "auto" / "none" / "deepseek" / "deepseek-legacy"
+    "reasoning_preserve",  # "default" / "on" / "off"
     "gpu_split",
     "backend",        # "cuda" / "vulkan"
     "jinja",
     "extra_args",
-    "kv_mode",
+    "kv_mode",        # f16 / q8 / q5 / q4 / iq4_nl / custom
     "mtp",
+    "spec_draft_n_max",
+    "flash_attn",     # auto / on / off
+    "kv_unified",
+    "fit",            # on / off
+    "threads",
+    "threads_batch",
+    "ctx_checkpoints",
+    "parallel",
+    "ngl",
+    "temp",
+    "top_p",
+    "top_k",
+    "min_p",
+    "presence_penalty",
+    "repeat_penalty",
+    "raw_args",       # 完整參數模式（非空時覆蓋所有 GUI 參數）
     "starred",
     "favorite_order",
 )
@@ -74,22 +93,27 @@ def read_export(path: Path) -> list[dict]:
     return clean
 
 
+def _profile_key(profile: dict) -> tuple[str, str]:
+    scheme = str(profile.get("scheme") or "").strip() or "預設"
+    return (str(profile.get("model") or ""), scheme)
+
+
 def merge_imported(current_profiles: list[dict], imported: list[dict]) -> tuple[list[dict], int, int]:
     """Merge imported profiles into the current list.
 
     Returns (merged_list, added, updated). Existing profiles (matched by
-    model filename) keep their settings unless the imported version has
+    model + scheme) keep their settings unless the imported version has
     fields the current one lacks. Starred order is preserved for existing
     entries; new entries get appended after starred ones."""
-    by_model = {p.get("model"): dict(p) for p in current_profiles if p.get("model")}
+    by_key = {_profile_key(p): dict(p) for p in current_profiles if p.get("model")}
     added = updated = 0
     for item in imported:
-        model = item.get("model")
-        if not model:
+        if not item.get("model"):
             continue
-        if model in by_model:
+        key = _profile_key(item)
+        if key in by_key:
             # Fill in missing fields from the import (e.g. kv_mode added later).
-            cur = by_model[model]
+            cur = by_key[key]
             changed = False
             for k, v in item.items():
                 if k not in cur and v not in (None, "", False, 0):
@@ -100,15 +124,16 @@ def merge_imported(current_profiles: list[dict], imported: list[dict]) -> tuple[
         else:
             item = dict(item)
             item.pop("configured", None)
-            by_model[model] = item
+            by_key[key] = item
             added += 1
-    # Re-order: starred by favorite_order, then unstarred by name.
-    merged = list(by_model.values())
+    # Re-order: starred by favorite_order, then unstarred by model/scheme.
+    merged = list(by_key.values())
     starred = [p for p in merged if p.get("starred")]
     starred.sort(key=lambda p: (
         int(p.get("favorite_order", 1 << 30)), str(p.get("name", "")).lower()))
     for i, p in enumerate(starred):
         p["favorite_order"] = i
     rest = [p for p in merged if not p.get("starred")]
-    rest.sort(key=lambda p: str(p.get("name", "")).lower())
+    rest.sort(key=lambda p: (str(p.get("model", "")).lower(),
+                             str(p.get("scheme") or "預設")))
     return starred + rest, added, updated

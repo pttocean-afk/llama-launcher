@@ -57,3 +57,10 @@ def token_path() -> Path:
     secrets_dir = data_dir() / "secrets"
     secrets_dir.mkdir(parents=True, exist_ok=True)
     return secrets_dir / "control-token"
+
+
+def api_key_path() -> Path:
+    """llama-server --api-key 的存放位置（與 settings.json 分開，不隨設定外洩）。"""
+    secrets_dir = data_dir() / "secrets"
+    secrets_dir.mkdir(parents=True, exist_ok=True)
+    return secrets_dir / "api-key"

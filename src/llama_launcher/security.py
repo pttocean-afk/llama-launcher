@@ -20,3 +20,29 @@ def ensure_control_token(path: Path) -> str:
     except OSError:
         pass
     return token
+
+
+def read_api_key(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def write_api_key(path: Path, value: str) -> None:
+    """value 為空字串時清除既有關鍵字。"""
+    value = value.strip()
+    if not value:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(value + "\n", encoding="utf-8")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
