@@ -38,15 +38,41 @@ from .host import (
     set_autostart,
     terminate_process_tree,
 )
+from .launch_args import (
+    DEFAULT_CACHE_RAM_MB,
+    DEFAULT_HOST,
+    DEFAULT_PORT,
+    DEFAULT_SCHEME,
+    KV_OPTIONS,
+    REASONING_EFFORTS,
+    build_reasoning_args,
+    build_server_args,
+    format_command,
+    kv_label_from_mode,
+    kv_mode_from_profile,
+    normalize_scheme,
+    parallel_from_profile,
+    preserve_unmanaged_extra_args,
+    profile_key,
+    reasoning_effort_value,
+    server_settings_from_dict,
+)
 from .migration import (
     detect_legacy_dir,
     merge_legacy_into_config,
     migrate_legacy_data,
     plan_migration,
 )
-from .paths import logs_dir, profiles_path, resource_dir, settings_path, token_path
+from .paths import (
+    api_key_path,
+    logs_dir,
+    profiles_path,
+    resource_dir,
+    settings_path,
+    token_path,
+)
 from .remote_setup import configure_remote_access
-from .security import ensure_control_token
+from .security import ensure_control_token, read_api_key, write_api_key
 from .tailscale import TailscaleManager
 
 # 單一實例檢查用的本機 port（不會跟 8080 衝突）
@@ -106,8 +132,11 @@ LLAMA_DIR = _find_llama_root()
 MODELS_DIR = LLAMA_DIR / "models"
 LLAMA_SERVER = _server_path(LLAMA_DIR, "cuda")
 VULKAN_SERVER = _server_path(LLAMA_DIR, "vulkan")
-PORT = 8080
+# 推理 port 可在全域設定調整；PORT 是記憶體中的目前值，
+# 改設定後呼叫 update_server_settings() 重新讀取。
+PORT = server_settings_from_dict(_load_settings().get("server"))["port"]
 CONTROL_PORT = 8765
+API_KEY_PATH = api_key_path()
 _MODEL_INVENTORY_CACHE: tuple[list[str], list[str], dict[str, int]] | None = None
 
 
@@ -134,11 +163,16 @@ def update_llama_dir(new_dir: str) -> bool:
     return True
 
 
-# CUDA / Vulkan 每次啟動前的 Windows VRAM 預檢與清理。
+# 每次 GPU 啟動前的 VRAM 預檢與清理。整組政策存在 settings.json 的
+# vram_preflight 區塊（每台電腦各自設定）：
+#   mode:          off（預設，不做任何事）/ warn（超標只警告）/ strict（清理+擋住）
+#   gpu_limits_mb: 每張 GPU 的 used VRAM 上限（MB，依 nvidia-smi index 排序）
+#   kill_processes: strict 模式下啟動前強制結束的程序（僅 Windows taskkill）
+#   comfyui:       啟動前檢查／停止 WSL 內的 ComfyUI service（僅 Windows）
+# 預設 off：不殺任何程式、不擋啟動；需要乾淨基線的機器自行開嚴格模式。
 NVIDIA_SMI = nvidia_smi_path()
-VRAM_PREFLIGHT_GPU0_LIMIT_MB = 2304
-VRAM_PREFLIGHT_GPU1_LIMIT_MB = 128
 VRAM_PREFLIGHT_WAIT_SECONDS = 10
+VRAM_PREFLIGHT_MODES = ("off", "warn", "strict")
 VRAM_CLEANUP_PROCESS_NAMES = [
     "NVIDIA Overlay.exe",
     "nvsphelper64.exe",
@@ -150,6 +184,50 @@ VRAM_CLEANUP_PROCESS_NAMES = [
     "RiotClientCrashHandler.exe",
     "EdgeGameAssist.exe",
 ]
+
+
+def vram_preflight_config() -> dict:
+    """讀取並正規化 settings.json 的 vram_preflight 區塊。"""
+    raw = _load_settings().get("vram_preflight") or {}
+    mode = str(raw.get("mode") or "off").strip().lower()
+    limits = []
+    for value in raw.get("gpu_limits_mb") or []:
+        try:
+            n = int(str(value).strip())
+            limits.append(max(0, n))
+        except (TypeError, ValueError):
+            limits.append(None)
+    comfy = {
+        "enabled": False,
+        "distro": "Ubuntu",
+        "service": "comfyui-raylight.service",
+    }
+    if isinstance(raw.get("comfyui"), dict):
+        c = raw["comfyui"]
+        comfy["enabled"] = bool(c.get("enabled", False))
+        comfy["distro"] = str(c.get("distro") or "Ubuntu").strip() or "Ubuntu"
+        comfy["service"] = str(c.get("service") or "").strip() or comfy["service"]
+    return {
+        "mode": mode if mode in VRAM_PREFLIGHT_MODES else "off",
+        "gpu_limits_mb": limits,
+        "kill_processes": [
+            str(v).strip() for v in (raw.get("kill_processes") or []) if str(v).strip()
+        ],
+        "comfyui": comfy,
+    }
+
+
+def update_server_settings() -> None:
+    """全域設定存檔後呼叫：把新的 server 區塊（port 等）載入記憶體。"""
+    global PORT
+    PORT = server_settings_from_dict(_load_settings().get("server"))["port"]
+
+
+def current_server_settings() -> dict:
+    """合併 settings.json 的 server 區塊與 secrets/ 裡的 api-key。"""
+    settings = server_settings_from_dict(_load_settings().get("server"))
+    settings["api_key"] = read_api_key(API_KEY_PATH)
+    return settings
 
 # Context 直接以 K 為單位輸入，例如 224 = 229376 tokens。
 CONTEXT_MIN_K = 8
@@ -180,87 +258,42 @@ def profile_vision_enabled(profile: dict) -> bool:
     return bool(profile.get("mmproj")) and bool(profile.get("vision_enabled", True))
 
 
-KV_OPTIONS = [
-    ("F16 / F16（最高精度，最吃顯存）", "f16"),
-    ("Q4 / Q4（正式版，現有設定）", "q4"),
-    ("IQ4-NL / IQ4-NL（K/V 同 IQ4-NL，品質略優於 Q4）", "iq4_nl"),
-]
-
-
-def kv_mode_from_profile(profile: dict) -> str:
-    """相容舊 models.json：優先讀 kv_mode，否則由 extra_args 推斷。"""
-    mode = profile.get("kv_mode")
-    if mode in {"f16", "q4", "iq4_nl"}:
-        return mode
-    extra = profile.get("extra_args", "") or ""
-    if "-ctk iq4_nl" in extra and "-ctv iq4_nl" in extra:
-        return "iq4_nl"
-    if "-ctk q4_0" in extra and "-ctv q4_0" in extra:
-        return "q4"
-    return "f16"
-
-
-def kv_label_from_mode(mode: str) -> str:
-    return next((label for label, value in KV_OPTIONS if value == mode), KV_OPTIONS[1][0])
-
-
-def preserve_unmanaged_extra_args(extra: str) -> list[str]:
-    """移除 GUI 管理的 KV/parallel/Jinja，保留使用者的 -b/-ub 等手動參數。"""
-    parts = (extra or "").split()
-    out = []
-    i = 0
-    managed = {"-ctk", "--cache-type-k", "-ctv", "--cache-type-v", "--parallel", "-np"}
-    while i < len(parts):
-        part = parts[i]
-        if part == "--jinja":
-            i += 1
-            continue
-        if part in managed:
-            i += 2
-        else:
-            out.append(part)
-            i += 1
-    return out
-
-# llama.cpp --reasoning-effort 可選值（b10621+）。"default" = 不傳旗標，
-# 由模型內建 chat template 決定思考深度。
-REASONING_EFFORTS = ("default", "minimal", "low", "medium", "high", "xhigh", "max")
-
-
-def reasoning_effort_value(profile: dict) -> str:
-    """正規化 profile 的 reasoning_effort（缺省/未知值 → "default"）。"""
-    value = str(profile.get("reasoning_effort") or "default").strip().lower()
-    return value if value in REASONING_EFFORTS else "default"
-
-
-def build_reasoning_args(profile: dict) -> list[str]:
-    """組 --reasoning / --reasoning-effort 參數。
-
-    effort 只在思考模式開啟時有意義（關閉時模型不會思考，傳了也沒用），
-    且 "default" 不傳旗標、保持模板預設行為。
-    """
-    reasoning = profile.get("reasoning", "off")
-    args = ["--reasoning", "on" if reasoning == "on" else "off"]
-    if reasoning == "on":
-        effort = reasoning_effort_value(profile)
-        if effort != "default":
-            args += ["--reasoning-effort", effort]
-    return args
-
-
-# 預設組態（對應原本 bat 的參數）
+# 預設組態（新模型未設定時的起點；對應原本 bat 的參數）。
+# 同一模型可以有多個「方案」(scheme)，各自獨立保存這組欄位。
 DEFAULT_PROFILE = {
     "name": "",
     "model": "",            # 相對 models\ 的檔名
+    "scheme": DEFAULT_SCHEME,  # 啟動方案名（預設 / code / chat / ...）
     "mmproj": "",           # 相對 models\ 的檔名，可空
     "vision_enabled": False, # 保留mmproj配對，但可在啟動時暫停載入
     "default_ctx": 131072,
-    "reasoning": "off",     # off / on
+    "reasoning": "off",     # off / on / auto
     "reasoning_effort": "default",  # default / minimal / low / medium / high / xhigh / max
-    "gpu_split": "16,8",
+    "reasoning_format": "auto",  # auto / none / deepseek / deepseek-legacy
+    "reasoning_preserve": "default",  # default / on / off
+    "gpu_split": "",        # 各 GPU 層數（逗號分隔）；空 = 自動
     "backend": "cuda",      # cuda / vulkan
     "jinja": False,          # 使用 GGUF 內建 Jinja chat template
     "extra_args": "-ctk q4_0 -ctv q4_0 --parallel 1",
+    "kv_mode": "q4",        # f16 / q8 / q5 / q4 / iq4_nl / custom
+    "mtp": False,
+    "spec_draft_n_max": "",  # 空 = llama.cpp 預設（MTP 建議 5）
+    "flash_attn": "auto",   # auto / on / off
+    "kv_unified": True,
+    "fit": "on",            # on / off（llama.cpp 預設 on）
+    "threads": "",          # 空 = llama.cpp 預設
+    "threads_batch": "",
+    "ctx_checkpoints": "",
+    "parallel": 1,
+    "ngl": 999,
+    # 採樣預設（server 端 completion 預設值；空 = llama.cpp 預設）
+    "temp": "",
+    "top_p": "",
+    "top_k": "",
+    "min_p": "",
+    "presence_penalty": "",
+    "repeat_penalty": "",
+    "raw_args": "",         # 完整參數模式：非空時覆蓋上方所有參數（bat 式）
     "starred": False,       # ★ 置頂
 }
 
@@ -432,15 +465,24 @@ def guess_mmproj(model_name: str, mmproj_list: list[str]) -> str:
 
 
 def merge_profiles(cfg: dict) -> list[dict]:
-    """已存設定 + 掃描到的模型合併成顯示清單（不覆寫已存設定）。"""
-    saved = {p.get("model"): p for p in cfg.get("profiles", [])}
+    """已存設定 + 掃描到的模型合併成顯示清單（不覆寫已存設定）。
+
+    同一模型可以有多個「方案」(scheme)：cfg 裡同 model 的多個 profile
+    都會保留；模型檔存在但從未設定時，產生一個「預設」方案。"""
+    saved_by_model: dict[str, list[dict]] = {}
+    for p in cfg.get("profiles", []):
+        if p.get("model"):
+            saved_by_model.setdefault(str(p["model"]), []).append(p)
     found = scan_gguf_files()
     mmprojs = scan_mmproj_files()
     merged = []
     for name in found:
-        if name in saved:
-            p = dict(saved[name])
-            p["configured"] = True
+        if name in saved_by_model:
+            for p in saved_by_model[name]:
+                q = dict(p)
+                q["scheme"] = normalize_scheme(p.get("scheme"))
+                q["configured"] = True
+                merged.append(q)
         else:
             p = dict(DEFAULT_PROFILE)
             p["name"] = name.replace(".gguf", "")
@@ -448,12 +490,17 @@ def merge_profiles(cfg: dict) -> list[dict]:
             p["mmproj"] = guess_mmproj(name, mmprojs)
             p["default_ctx"] = 131072
             p["configured"] = False
-        merged.append(p)
-    # ★ 置頂模型依使用者指定順序排列；未置頂模型照名稱排序。
+            merged.append(p)
+    # 舊檔沒有 parallel 欄位時由 extra_args 的 --parallel 推斷。
+    for p in merged:
+        if "parallel" not in p:
+            p["parallel"] = parallel_from_profile(p)
+    # ★ 置頂方案依使用者指定順序排列；未置頂按模型檔名 + 方案名排序。
     merged.sort(key=lambda p: (
         not bool(p.get("starred")),
         int(p.get("favorite_order", 999999)) if p.get("starred") else 999999,
-        p["name"].lower(),
+        str(p.get("model", "")).lower(),
+        p.get("scheme") or DEFAULT_SCHEME,
     ))
     return merged
 
@@ -594,14 +641,15 @@ class ServerManager:
         return False
 
     def adopt_existing_server(self) -> tuple[bool, str]:
-        """Adopt the unique llama-server process explicitly configured for port 8080."""
+        """Adopt the unique llama-server process on the configured inference port."""
         if self.running:
             return True, f"已管理 PID {self.pid_text()}"
         matches = list_llama_servers(PORT)
         if len(matches) != 1:
             if not matches:
-                return False, "沒有命令列明確使用port 8080的llama-server"
-            return False, f"找到 {len(matches)} 個port 8080候選，為安全起見不自動接管"
+                return False, f"沒有命令列明確使用port {PORT}的llama-server"
+            return False, (f"找到 {len(matches)} 個port {PORT}候選，"
+                           "為安全起見不自動接管")
 
         item = matches[0]
         pid = item.pid
@@ -668,10 +716,15 @@ class ServerManager:
             match = re.search(r"\d+", line)
             if match:
                 values.append(int(match.group()))
-        return values if len(values) >= 2 else None
+        return values if values else None
 
-    def query_gpu1_processes(self) -> list[str]:
-        """列出 nvidia-smi 可見、綁在第二張 GPU 的 process，供阻止啟動時說明。"""
+    def query_gpu_count(self) -> int | None:
+        """nvidia-smi 可見的 GPU 數；讀不到回 None。"""
+        values = self.query_gpu_memory_mb()
+        return len(values) if values else None
+
+    def query_gpu_processes(self, gpu_index: int) -> list[str]:
+        """列出綁在指定 GPU（nvidia-smi index）的 process，供擋住啟動時說明。"""
         try:
             gpu_result = self._run_hidden([
                 str(NVIDIA_SMI),
@@ -687,40 +740,36 @@ class ServerManager:
             return []
         if gpu_result.returncode != 0 or app_result.returncode != 0:
             return []
-        gpu1_uuid = ""
+        target_uuid = ""
         for line in gpu_result.stdout.splitlines():
             parts = [part.strip() for part in line.split(",", 1)]
-            if len(parts) == 2 and parts[0] == "1":
-                gpu1_uuid = parts[1]
+            if len(parts) == 2 and parts[0] == str(gpu_index):
+                target_uuid = parts[1]
                 break
-        if not gpu1_uuid:
+        if not target_uuid:
             return []
         owners = []
         for line in app_result.stdout.splitlines():
             parts = [part.strip() for part in line.split(",", 2)]
-            if len(parts) != 3 or parts[2] != gpu1_uuid:
+            if len(parts) != 3 or parts[2] != target_uuid:
                 continue
             owners.append(f"{Path(parts[1]).name} (PID {parts[0]})")
         return sorted(set(owners))
 
-    def _stop_comfyui_if_active(self) -> tuple[bool, str]:
-        """Apply the legacy Windows/WSL ComfyUI policy only on Windows hosts."""
+    def _stop_comfyui_if_active(self, distro: str, service: str) -> tuple[bool, str]:
+        """Stop the configured WSL ComfyUI service (Windows hosts only)."""
         if not IS_WINDOWS:
-            return True, "Linux host cleanup policy not configured"
-        check_args = [
-            "wsl.exe", "-d", "Ubuntu", "--",
-            "systemctl", "is-active", "--quiet", "comfyui-raylight.service",
-        ]
+            return True, "ComfyUI check skipped (not a Windows host)"
+        check_args = ["wsl.exe", "-d", distro, "--",
+                      "systemctl", "is-active", "--quiet", service]
         try:
             check = self._run_hidden(check_args)
         except (OSError, subprocess.SubprocessError) as exc:
             return False, f"無法檢查 ComfyUI service：{exc}"
         if check.returncode != 0:
             return True, "ComfyUI inactive"
-        stop_args = [
-            "wsl.exe", "-d", "Ubuntu", "--",
-            "systemctl", "stop", "comfyui-raylight.service",
-        ]
+        stop_args = ["wsl.exe", "-d", distro, "--",
+                     "systemctl", "stop", service]
         try:
             stopped = self._run_hidden(stop_args, timeout=30)
         except (OSError, subprocess.SubprocessError) as exc:
@@ -730,28 +779,60 @@ class ServerManager:
             return False, f"停止 ComfyUI 失敗：{detail or 'unknown error'}"
         return True, "ComfyUI stopped"
 
-    def _close_vram_cleanup_allowlist(self):
-        """Apply the approved Windows process cleanup allowlist only on Windows."""
+    def _close_vram_cleanup_allowlist(self, names: list[str]) -> None:
+        """End the configured processes (taskkill, Windows hosts only)."""
         if not IS_WINDOWS:
             return
-        for name in VRAM_CLEANUP_PROCESS_NAMES:
+        for name in names:
             try:
                 self._run_hidden(["taskkill.exe", "/IM", name, "/T", "/F"], timeout=10)
             except (OSError, subprocess.SubprocessError):
                 pass
 
-    def run_vram_preflight(self) -> tuple[bool, str]:
-        """Apply the host-specific VRAM cleanup policy before every GPU start."""
-        if not IS_WINDOWS:
-            return True, "VRAM preflight skipped: no Linux host cleanup policy configured"
-        before = self.query_gpu_memory_mb()
-        if before is None:
-            return False, "無法讀取兩張 NVIDIA GPU 的 VRAM，已取消伺服器啟動"
+    @staticmethod
+    def _limit_violations(values: list[int], limits: list) -> list[tuple[int, int, int]]:
+        """回傳超標的 (index, used_mb, limit_mb) 清單。"""
+        out = []
+        for index, used in enumerate(values):
+            if index < len(limits) and limits[index] is not None and used > limits[index]:
+                out.append((index, used, limits[index]))
+        return out
 
-        comfy_ok, comfy_status = self._stop_comfyui_if_active()
-        if not comfy_ok:
-            return False, comfy_status
-        self._close_vram_cleanup_allowlist()
+    def run_vram_preflight(self) -> tuple[bool, str]:
+        """VRAM 預檢：政策來自 settings.json（預設 off＝不做任何事）。
+
+        off：直接通過。
+        warn：讀取 VRAM，超標只警告、不擋。
+        strict：清理（ComfyUI + 指定程序）後等待回到上限內，超時才擋住。
+        """
+        cfg = vram_preflight_config()
+        mode = cfg["mode"]
+        if mode == "off":
+            return True, "VRAM preflight disabled"
+        limits = cfg["gpu_limits_mb"]
+
+        before = self.query_gpu_memory_mb()
+        if mode == "warn":
+            if before is None:
+                return True, "VRAM preflight: GPU 狀態讀取不到，繼續啟動"
+            violations = self._limit_violations(before, limits)
+            if violations:
+                detail = ", ".join(
+                    f"GPU{i} {u} MB > {l} MB" for i, u, l in violations)
+                return True, f"VRAM preflight 警告：{detail}，繼續啟動"
+            return True, "VRAM preflight OK"
+
+        # strict
+        if before is None:
+            return False, "無法讀取 NVIDIA GPU 的 VRAM，已取消伺服器啟動"
+
+        comfy_status = "ComfyUI check disabled"
+        if cfg["comfyui"]["enabled"]:
+            comfy_ok, comfy_status = self._stop_comfyui_if_active(
+                cfg["comfyui"]["distro"], cfg["comfyui"]["service"])
+            if not comfy_ok:
+                return False, comfy_status
+        self._close_vram_cleanup_allowlist(cfg["kill_processes"])
 
         deadline = time.monotonic() + VRAM_PREFLIGHT_WAIT_SECONDS
         after = before
@@ -760,33 +841,35 @@ class ServerManager:
             if current is None:
                 return False, "VRAM 清理後無法重新讀取 GPU 狀態，已取消啟動"
             after = current
-            if (after[0] <= VRAM_PREFLIGHT_GPU0_LIMIT_MB and
-                    after[1] <= VRAM_PREFLIGHT_GPU1_LIMIT_MB):
+            if not self._limit_violations(after, limits):
                 break
             if time.monotonic() >= deadline:
-                owners = self.query_gpu1_processes()
-                owners_text = ("\nGPU1 process：" + ", ".join(owners)) if owners else ""
+                lines = []
+                for index, used in enumerate(after):
+                    limit = limits[index] if index < len(limits) else None
+                    if limit is None or used <= limit:
+                        continue
+                    lines.append(f"GPU{index}：{used} MB（需 ≤ {limit} MB）")
+                    owners = self.query_gpu_processes(index)
+                    if owners:
+                        lines.append(f"GPU{index} process：" + ", ".join(owners))
+                detail = "\n".join(lines) or "VRAM 超標"
                 return False, (
                     "VRAM 尚未回到安全基線，已取消伺服器啟動。\n"
-                    f"GPU0：{after[0]} MB（需 ≤ {VRAM_PREFLIGHT_GPU0_LIMIT_MB}）\n"
-                    f"GPU1：{after[1]} MB（需 ≤ {VRAM_PREFLIGHT_GPU1_LIMIT_MB}）"
-                    f"{owners_text}\n"
-                    "請關閉其他 AI／GPU 程式後再試。"
+                    f"{detail}\n請關閉其他 AI／GPU 程式後再試。"
                 )
             time.sleep(0.5)
 
-        summary = (
-            f"VRAM preflight: GPU0 {before[0]}→{after[0]} MB, "
-            f"GPU1 {before[1]}→{after[1]} MB, {comfy_status}"
-        )
+        parts = [f"GPU{i} {before[i]}→{after[i]} MB"
+                 for i in range(len(after)) if i < len(before)]
+        summary = f"VRAM preflight: {', '.join(parts)}, {comfy_status}"
         return True, summary
 
     def start(self, profile: dict, ctx_label: str) -> tuple[bool, str]:
         """啟動 llama-server（CREATE_NO_WINDOW，stdout/stderr 導流到 log 檔）。"""
         if self.running:
             return False, "llama-server 已在執行中"
-        mtp_enabled = bool(profile.get("mtp", False))
-        backend = profile.get("backend", "cuda")
+        backend = str(profile.get("backend", "cuda")).strip().lower()
         windows_server = VULKAN_SERVER if backend == "vulkan" else LLAMA_SERVER
         if not windows_server.exists():
             return False, f"找不到 {windows_server}"
@@ -807,44 +890,21 @@ class ServerManager:
             mmproj_path = model_file(profile["mmproj"])
             if not mmproj_path.exists():
                 return False, f"找不到視覺模型檔：models/{profile['mmproj']}"
-        # CUDA / Vulkan 每次啟動都先清理 VRAM；不再限制 224K+ context。
+        # VRAM 預檢政策來自全域設定（預設 off）；CUDA/Vulkan 才適用。
         self.preflight_summary = "not required"
         if backend_requires_vram_preflight(backend):
             preflight_ok, preflight_msg = self.run_vram_preflight()
             if not preflight_ok:
                 return False, preflight_msg
             self.preflight_summary = preflight_msg
-        server_args = [str(windows_server), "-m", str(model_path)]
-        if mmproj_path is not None:
-            server_args += ["--mmproj", str(mmproj_path)]
-        server_args += [
-            "-ngl", str(int(profile.get("ngl", 999))),
-            "-c", str(ctx),
-            "--host", "0.0.0.0",
-            "--port", str(PORT),
-            "-sm", "layer",
-            # RAM prompt cache 上限 24GB（全 model 共用；本機 64GB RAM，多輪 agent 重用 prefix 省 prefill）
-            "-cram", "24000",
-        ]
-        if backend == "vulkan":
-            server_args += ["--device", "Vulkan0,Vulkan1"]
-        gpu_split = (profile.get("gpu_split") or "").strip()
-        if gpu_split:
-            server_args += ["-ts", gpu_split]
-        server_args += ["-mg", "0"]
-        # extra_args（KV 快取、--parallel 等）；--parallel 由這裡決定，缺了才補 1
-        # 先放共用 runtime 參數，再放 reasoning，排列與原本 bat 對齊。
-        if profile.get("extra_args"):
-            server_args += profile["extra_args"].split()
-        if "--parallel" not in server_args:
-            server_args += ["--parallel", "1"]
-        server_args += build_reasoning_args(profile)
-        if profile.get("jinja", False) and "--jinja" not in server_args:
-            server_args += ["--jinja"]
-        if mtp_enabled:
-            server_args += ["--spec-type", "draft-mtp"]
 
-        args = server_args
+        # 參數組裝與設定視窗的「最終指令預覽」共用同一個純函數。
+        vulkan_gpu_count = None
+        if backend == "vulkan" and IS_WINDOWS:
+            vulkan_gpu_count = self.query_gpu_count()
+        args = build_server_args(
+            profile, ctx, current_server_settings(), model_path, mmproj_path,
+            vulkan_gpu_count=vulkan_gpu_count)
         launch_cwd = windows_server.parent
 
         # log 檔
@@ -1764,13 +1824,13 @@ class LauncherApp:
         self.root.update_idletasks()
 
     def on_diagnostics(self):
-        report = diagnostics_dict(collect_diagnostics(LLAMA_DIR))
+        report = diagnostics_dict(collect_diagnostics(LLAMA_DIR, inference_port=PORT))
         labels = {
             "llama_dir": "llama.cpp folder",
             "llama_server_exists": llama_server_filename(),
             "models_dir_exists": "Models folder",
             "model_count": "Model count",
-            "inference_port_8080": "Inference port 8080",
+            "inference_port": f"Inference port {PORT}",
             "control_port_8765": "Control port 8765",
             "tailscale_installed": "Tailscale installed",
             "tailscale_serve_url": "Tailscale HTTPS URL",
@@ -1806,6 +1866,7 @@ class LauncherApp:
 
     def remote_profiles(self) -> list[dict]:
         return [{"name": p.get("name", ""), "model": p.get("model", ""),
+                 "scheme": normalize_scheme(p.get("scheme")),
                  "backend": p.get("backend", "cuda"),
                  "default_ctx": p.get("default_ctx", 131072),
                  "reasoning": p.get("reasoning", "off"),
@@ -1828,7 +1889,17 @@ class LauncherApp:
         model = str(body.get("model", "")).strip()
         if not model:
             return {"ok": False, "error": "model is required"}
-        profile = next((p for p in self.profiles if p.get("model") == model), None)
+        scheme = str(body.get("scheme") or "").strip()
+        matches = [p for p in self.profiles if p.get("model") == model]
+        if scheme:
+            profile = next((p for p in matches
+                            if normalize_scheme(p.get("scheme")) == normalize_scheme(scheme)),
+                           None)
+        else:
+            # 未指定方案：優先「預設」方案，否則該模型的第一個方案。
+            profile = next((p for p in matches
+                            if normalize_scheme(p.get("scheme")) == DEFAULT_SCHEME),
+                           None) or (matches[0] if matches else None)
         if profile is None:
             return {"ok": False, "error": "profile is not in models.json"}
         with self.server_lock:
@@ -1848,29 +1919,40 @@ class LauncherApp:
     # ---------------- listbox
     def _persist_profile(self, profile: dict):
         self.cfg.setdefault("profiles", [])
+        key = profile_key(profile)
         for i, saved in enumerate(self.cfg["profiles"]):
-            if saved.get("model") == profile.get("model"):
+            if profile_key(saved) == key:
                 self.cfg["profiles"][i] = dict(profile)
                 break
         else:
             self.cfg["profiles"].append(dict(profile))
 
-    def refresh_listbox(self, select_model: str | None = None):
-        """首頁只顯示置頂模型；完整清單由 ModelLibraryDialog 管理。"""
+    @staticmethod
+    def _display_name(p: dict) -> str:
+        """列表顯示名：非「預設」方案附方案名（同一模型多方案時區分用）。"""
+        scheme = normalize_scheme(p.get("scheme"))
+        return p["name"] if scheme == DEFAULT_SCHEME else f"{p['name']} · {scheme}"
+
+    def refresh_listbox(self, select_model=None):
+        """首頁只顯示置頂方案；完整清單由 ModelLibraryDialog 管理。
+
+        select_model：(model, scheme) 元組或 model 字串；None = 保持目前選取。"""
         if select_model is None:
             current = self.current_profile() if hasattr(self, "favorite_profiles") else None
-            select_model = current.get("model") if current else None
+            select_model = profile_key(current) if current else None
+        if isinstance(select_model, str):
+            select_model = (select_model, DEFAULT_SCHEME)
         self.favorite_profiles = [p for p in self.profiles if p.get("starred")]
         self.listbox.delete(0, "end")
-        # 列表只顯示名稱（詳細資訊在右側 detail 面板看，避免被擠掉）
+        # 列表顯示名稱＋方案（詳細資訊在右側 detail 面板看，避免被擠掉）
         for p in self.favorite_profiles:
-            self.listbox.insert("end", p["name"])
+            self.listbox.insert("end", self._display_name(p))
         if not self.favorite_profiles:
             self.listbox.insert("end", "No favorite models — open All models")
             self.listbox.itemconfig(0, fg="#7f8b9d")
             return
         index = next((i for i, p in enumerate(self.favorite_profiles)
-                      if p.get("model") == select_model), 0)
+                      if profile_key(p) == select_model), 0)
         self.listbox.selection_set(index)
         self.listbox.activate(index)
         self.listbox.see(index)
@@ -1879,8 +1961,9 @@ class LauncherApp:
         p = dict(profile)
         p["starred"] = starred
         if starred:
+            key = profile_key(p)
             orders = [int(x.get("favorite_order", -1)) for x in self.profiles
-                      if x.get("starred") and x.get("model") != p.get("model")]
+                      if x.get("starred") and profile_key(x) != key]
             if "favorite_order" not in p:
                 p["favorite_order"] = max(orders, default=-1) + 1
         else:
@@ -1889,7 +1972,7 @@ class LauncherApp:
         save_config(self.cfg)
         self.profiles = merge_profiles(self.cfg)
         self._normalize_favorite_orders()
-        self.refresh_listbox(select_model=p.get("model") if starred else None)
+        self.refresh_listbox(profile_key(p) if starred else None)
         self.update_detail()
 
     def _normalize_favorite_orders(self):
@@ -1905,9 +1988,14 @@ class LauncherApp:
             self.profiles = merge_profiles(self.cfg)
 
     def move_favorite_model(self, model: str, delta: int):
+        """置頂清單排序：model 可為 (model, scheme) 元組或 model 字串。"""
+        if isinstance(model, str):
+            key = (model, DEFAULT_SCHEME)
+        else:
+            key = tuple(model)
         favorites = [p for p in self.profiles if p.get("starred")]
         index = next((i for i, p in enumerate(favorites)
-                      if p.get("model") == model), -1)
+                      if profile_key(p) == key), -1)
         target = index + delta
         if index < 0 or target < 0 or target >= len(favorites):
             return
@@ -1917,13 +2005,13 @@ class LauncherApp:
             self._persist_profile(p)
         save_config(self.cfg)
         self.profiles = merge_profiles(self.cfg)
-        self.refresh_listbox(select_model=model)
+        self.refresh_listbox(key)
         self.update_detail()
 
     def move_favorite(self, delta: int):
         p = self.current_profile()
         if p:
-            self.move_favorite_model(p["model"], delta)
+            self.move_favorite_model(profile_key(p), delta)
 
     def toggle_star(self):
         p = self.current_profile()
@@ -1964,8 +2052,11 @@ class LauncherApp:
             size = model_size_text(p.get("model", ""))
             vision_state = ("TEXT" if not p.get("mmproj") else
                             ("VISION ON" if profile_vision_enabled(p) else "VISION OFF"))
+            scheme = normalize_scheme(p.get("scheme"))
+            title = p["name"] if scheme == DEFAULT_SCHEME \
+                else f"{p['name']}  ·  {scheme}"
             lines = [
-                p["name"],
+                title,
                 f"Size: {size or '?'}   ·   {p.get('backend','cuda').upper()}",
                 vision_state,
                 f"Default context: {format_context_k(p.get('default_ctx', 131072))}K",
@@ -2019,8 +2110,9 @@ class LauncherApp:
         # 不用再到設定視窗重設一遍。
         p["default_ctx"] = ctx_val
         self.cfg.setdefault("profiles", [])
+        key = (p["model"], normalize_scheme(p.get("scheme")))
         for i, sp in enumerate(self.cfg["profiles"]):
-            if sp.get("model") == p["model"]:
+            if profile_key(sp) == key:
                 self.cfg["profiles"][i] = p
                 break
         else:
@@ -2028,7 +2120,7 @@ class LauncherApp:
         save_config(self.cfg)
         self.profiles = merge_profiles(self.cfg)
         # 讓 detail 面板顯示存檔後的設定（Default context 等）
-        self.refresh_listbox(select_model=p["model"])
+        self.refresh_listbox(key)
         self.update_detail()
 
         with self.server_lock:
@@ -2456,10 +2548,13 @@ class ModelLibraryDialog(tk.Toplevel):
             return None
         return self.filtered[sel[0]]
 
-    def refresh(self, select_model: str | None = None):
+    def refresh(self, select_model=None):
+        """select_model：(model, scheme) 元組或 model 字串；None = 保持目前。"""
         current = self.current()
         if select_model is None and current:
-            select_model = current.get("model")
+            select_model = profile_key(current)
+        elif isinstance(select_model, str):
+            select_model = (select_model, DEFAULT_SCHEME)
         query = self.search_var.get().strip().lower()
         self.filtered = [p for p in self.app.profiles
                          if not query or query in p.get("name", "").lower()
@@ -2474,10 +2569,11 @@ class ModelLibraryDialog(tk.Toplevel):
             size = model_size_text(p.get("model", "")) or "?"
             backend = p.get("backend", "cuda").upper()
             self.listbox.insert(
-                "end", f"{star}  {p['name']}    [{size}]    {media} · {backend}")
+                "end", f"{star}  {self.app._display_name(p)}    [{size}]    "
+                       f"{media} · {backend}")
         if self.filtered:
             index = next((i for i, p in enumerate(self.filtered)
-                          if p.get("model") == select_model), 0)
+                          if profile_key(p) == tuple(select_model)), 0)
             self.listbox.selection_set(index)
             self.listbox.see(index)
 
@@ -2486,7 +2582,7 @@ class ModelLibraryDialog(tk.Toplevel):
         if not p:
             return
         self.app.set_profile_starred(p, not bool(p.get("starred")))
-        self.refresh(select_model=p.get("model"))
+        self.refresh(select_model=profile_key(p))
 
     def move(self, delta: int):
         p = self.current()
@@ -2495,8 +2591,8 @@ class ModelLibraryDialog(tk.Toplevel):
         if not p.get("starred"):
             messagebox.showinfo("提示", "請先把模型設為置頂。", parent=self)
             return
-        self.app.move_favorite_model(p["model"], delta)
-        self.refresh(select_model=p["model"])
+        self.app.move_favorite_model(profile_key(p), delta)
+        self.refresh(select_model=profile_key(p))
 
     def settings(self):
         p = self.current()
@@ -2504,7 +2600,7 @@ class ModelLibraryDialog(tk.Toplevel):
             return
         dialog = SettingsDialog(self, self.app, p)
         self.wait_window(dialog)
-        self.refresh(select_model=p.get("model"))
+        self.refresh(select_model=profile_key(p))
 
     def add_model(self):
         dialog = AddModelDialog(self, self.app)
@@ -2541,15 +2637,24 @@ class GlobalSettingsDialog(tk.Toplevel):
         super().__init__(parent)
         self.app = app
         self.title("設定（全域）")
-        win_w, win_h = fit_window_size(self, S(560), S(720))
+        win_w, win_h = fit_window_size(self, S(620), S(760))
         self.geometry(f"{win_w}x{win_h}")
-        self.minsize(*fit_window_size(self, S(520), S(640), screen_ratio=1.0))
+        self.minsize(*fit_window_size(self, S(540), S(640), screen_ratio=1.0))
         self.resizable(True, True)
         self.transient(parent)
         self.grab_set()
 
-        body = tk.Frame(self, padx=18, pady=14)
-        body.pack(fill="both", expand=True)
+        # 可捲動內容區（新增區塊後高度不夠時不會擠掉按鈕）
+        outer = tk.Frame(self)
+        outer.pack(side="top", fill="both", expand=True)
+        canvas = tk.Canvas(outer, highlightthickness=0)
+        vsb = tk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        body = tk.Frame(canvas, padx=18, pady=14)
+        canvas.create_window((0, 0), window=body, anchor="nw")
+        body.bind("<Configure>",
+                  lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
 
         tk.Label(body, text="全域設定",
                  font=("Segoe UI", 13, "bold")).pack(anchor="w")
@@ -2574,6 +2679,123 @@ class GlobalSettingsDialog(tk.Toplevel):
                 self.dir_var.set(f)
         tk.Button(dir_row, text="瀏覽…", command=browse_dir,
                   padx=10, pady=3).pack(side="left", padx=(6, 0))
+        tk.Frame(body, height=1, bg="#ddd").pack(fill="x", pady=12)
+
+        # ---- 伺服器（host / port / alias / api-key）
+        server = _load_settings().get("server") or {}
+        tk.Label(body, text="伺服器", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        tk.Label(body, text="llama-server 的網路參數（對所有模型生效）。",
+                 font=("Segoe UI", 8), fg="#888").pack(anchor="w", pady=(1, 4))
+        srv = server_settings_from_dict(server)
+        srv_grid = tk.Frame(body)
+        srv_grid.pack(fill="x")
+        self.host_var = tk.StringVar(value=srv["host"])
+        self.port_var = tk.StringVar(value=str(srv["port"]))
+        self.alias_var = tk.StringVar(value=str(server.get("alias") or ""))
+        self.api_key_var = tk.StringVar(value="")
+        existing_key = read_api_key(API_KEY_PATH)
+        self._api_key_existing = existing_key
+        for row, (label, var, width) in enumerate((
+                ("Host", self.host_var, None),
+                ("Port", self.port_var, 8),
+                ("Alias（API 別名）", self.alias_var, None))):
+            tk.Label(srv_grid, text=label, font=("Segoe UI", 9)).grid(
+                row=row, column=0, sticky="w", pady=2)
+            if width:
+                tk.Entry(srv_grid, textvariable=var, width=width,
+                         font=("Consolas", 9)).grid(row=row, column=1, sticky="w")
+            else:
+                tk.Entry(srv_grid, textvariable=var,
+                         font=("Consolas", 9)).grid(
+                             row=row, column=1, sticky="ew")
+        srv_grid.columnconfigure(1, weight=1)
+        key_row = tk.Frame(body)
+        key_row.pack(fill="x", pady=(6, 0))
+        tk.Label(key_row, text="API Key", font=("Segoe UI", 9)).pack(side="left")
+        self.api_key_entry = tk.Entry(key_row, textvariable=self.api_key_var,
+                                      show="•", font=("Consolas", 9))
+        self.api_key_entry.pack(side="left", fill="x", expand=True, padx=(6, 4))
+        key_status = ("已設定（%s…%s）" % (existing_key[:4], existing_key[-4:])) \
+            if len(existing_key) >= 8 else ("已設定" if existing_key else "未設定")
+        tk.Label(key_row, text=f"目前：{key_status}", font=("Segoe UI", 8),
+                 fg="#888").pack(side="left")
+        tk.Button(key_row, text="清除", command=self._clear_api_key,
+                  font=("Segoe UI", 8)).pack(side="left", padx=(4, 0))
+        tk.Label(body, text="API Key 留空＝維持目前值；填入新值＝覆蓋。"
+                            "存於 secrets/ 目錄，不寫進 settings.json。",
+                 font=("Segoe UI", 8), fg="#888", anchor="w",
+                 wraplength=560, justify="left").pack(anchor="w", pady=(2, 0))
+        tk.Frame(body, height=1, bg="#ddd").pack(fill="x", pady=12)
+
+        # ---- VRAM 預檢
+        pf = vram_preflight_config()
+        tk.Label(body, text="VRAM 預檢（GPU 啟動前）", font=("Segoe UI", 10,
+                  "bold")).pack(anchor="w")
+        tk.Label(body, text="預設關閉。需要乾淨顯存基線（例如固定層數分配）的機器"
+                            "可開嚴格模式。",
+                 font=("Segoe UI", 8), fg="#888").pack(anchor="w", pady=(1, 4))
+        self.preflight_var = tk.StringVar(
+            value=pf["mode"] if pf["mode"] in VRAM_PREFLIGHT_MODES else "off")
+        pf_row = tk.Frame(body)
+        pf_row.pack(fill="x")
+        tk.Label(pf_row, text="模式：", font=("Segoe UI", 9)).pack(side="left")
+        ttk.Combobox(pf_row, textvariable=self.preflight_var,
+                     values=["off", "warn", "strict"], state="readonly",
+                     width=8).pack(side="left", padx=(4, 12))
+        tk.Label(pf_row, text="off＝不檢查；warn＝超標只警告；"
+                              "strict＝清理+超時擋住",
+                 font=("Segoe UI", 8), fg="#888").pack(side="left")
+        self.preflight_limits_var = tk.StringVar(
+            value=",".join(str(v) for v in pf["gpu_limits_mb"]
+                           if v is not None))
+        limits_row = tk.Frame(body)
+        limits_row.pack(fill="x", pady=(4, 0))
+        tk.Label(limits_row, text="VRAM 上限（MB，依 GPU 順序）：",
+                 font=("Segoe UI", 9)).pack(side="left")
+        tk.Entry(limits_row, textvariable=self.preflight_limits_var, width=14,
+                 font=("Consolas", 9)).pack(side="left", padx=(4, 0))
+        tk.Label(limits_row, text="例：2304,128；留空＝不限制",
+                 font=("Segoe UI", 8), fg="#888").pack(side="left", padx=(6, 0))
+        tk.Label(body, text="啟動前強制結束的程序（僅 strict、僅 Windows，一行一個）",
+                 font=("Segoe UI", 9), anchor="w").pack(anchor="w", pady=(6, 2))
+        self.preflight_procs_text = tk.Text(body, height=4, font=("Consolas", 9))
+        self.preflight_procs_text.pack(fill="x")
+        self.preflight_procs_text.insert(
+            "1.0", "\n".join(pf["kill_processes"]))
+        comfy = pf["comfyui"]
+        self.comfyui_enabled_var = tk.BooleanVar(value=comfy["enabled"])
+        self.comfyui_distro_var = tk.StringVar(value=comfy["distro"])
+        self.comfyui_service_var = tk.StringVar(value=comfy["service"])
+        tk.Checkbutton(body, text="啟動前停止 WSL 裡的 ComfyUI service（僅 strict）",
+                       variable=self.comfyui_enabled_var, anchor="w",
+                       font=("Segoe UI", 9)).pack(anchor="w")
+        comfy_row = tk.Frame(body)
+        comfy_row.pack(fill="x", pady=(2, 0))
+        tk.Label(comfy_row, text="WSL 分區：", font=("Segoe UI", 9)).pack(side="left")
+        tk.Entry(comfy_row, textvariable=self.comfyui_distro_var, width=10,
+                 font=("Consolas", 9)).pack(side="left", padx=(4, 12))
+        tk.Label(comfy_row, text="Service：", font=("Segoe UI", 9)).pack(side="left")
+        tk.Entry(comfy_row, textvariable=self.comfyui_service_var, width=26,
+                 font=("Consolas", 9)).pack(side="left", padx=(4, 0))
+        tk.Frame(body, height=1, bg="#ddd").pack(fill="x", pady=12)
+
+        # ---- 其他（RAM cache / Vulkan 裝置）
+        tk.Label(body, text="其他", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        other_grid = tk.Frame(body)
+        other_grid.pack(fill="x", pady=(4, 0))
+        self.cache_ram_var = tk.StringVar(
+            value=str(server.get("cache_ram_mb", DEFAULT_CACHE_RAM_MB)))
+        self.vulkan_devices_var = tk.StringVar(
+            value=str(server.get("vulkan_devices") or ""))
+        tk.Label(other_grid, text="RAM prompt cache 上限（MB，-cram）：",
+                 font=("Segoe UI", 9)).grid(row=0, column=0, sticky="w")
+        tk.Entry(other_grid, textvariable=self.cache_ram_var, width=10,
+                 font=("Consolas", 9)).grid(row=0, column=1, sticky="w",
+                                            padx=(4, 16))
+        tk.Label(other_grid, text="Vulkan --device（留空＝自動）：",
+                 font=("Segoe UI", 9)).grid(row=1, column=0, sticky="w")
+        tk.Entry(other_grid, textvariable=self.vulkan_devices_var, width=20,
+                 font=("Consolas", 9)).grid(row=1, column=1, sticky="w", padx=(4, 0))
         tk.Frame(body, height=1, bg="#ddd").pack(fill="x", pady=12)
 
         # ---- 隨開機啟動
@@ -2645,6 +2867,11 @@ class GlobalSettingsDialog(tk.Toplevel):
                   font=("Segoe UI", 10), width=12,
                   padx=16, pady=7).pack(side="right", padx=(0, 10))
 
+    def _clear_api_key(self):
+        self.api_key_var.set("")
+        self._api_key_existing = ""
+        self._api_key_dirty = True
+
     def _reload_presets(self):
         self.preset_list.delete(0, "end")
         for preset in gpu_preset_options():
@@ -2680,9 +2907,58 @@ class GlobalSettingsDialog(tk.Toplevel):
             self.app.refresh_listbox()
             self.app.update_detail()
 
+        # 伺服器參數
+        try:
+            port = int(self.port_var.get().strip() or DEFAULT_PORT)
+            if not 1 <= port <= 65535:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Port 格式錯誤",
+                                 "Port 請輸入 1～65535 的整數。", parent=self)
+            return
         settings = _load_settings()
+        settings["server"] = {
+            "host": self.host_var.get().strip() or DEFAULT_HOST,
+            "port": port,
+            "alias": self.alias_var.get().strip(),
+            "cache_ram_mb": self.cache_ram_var.get().strip() or DEFAULT_CACHE_RAM_MB,
+            "vulkan_devices": self.vulkan_devices_var.get().strip(),
+        }
+        # VRAM 預檢
+        limits = []
+        for value in self.preflight_limits_var.get().split(","):
+            value = value.strip()
+            if not value:
+                continue
+            try:
+                limits.append(max(0, int(value)))
+            except ValueError:
+                messagebox.showerror(
+                    "VRAM 上限格式錯誤",
+                    "上限請用逗號分隔的整數 MB，例如 2304,128。", parent=self)
+                return
+        settings["vram_preflight"] = {
+            "mode": self.preflight_var.get(),
+            "gpu_limits_mb": limits,
+            "kill_processes": [line.strip()
+                               for line in self.preflight_procs_text.get(
+                                   "1.0", "end").splitlines() if line.strip()],
+            "comfyui": {
+                "enabled": bool(self.comfyui_enabled_var.get()),
+                "distro": self.comfyui_distro_var.get().strip() or "Ubuntu",
+                "service": self.comfyui_service_var.get().strip(),
+            },
+        }
         settings["close_to_tray"] = bool(self.close_to_tray_var.get())
         _save_settings(settings)
+        update_server_settings()
+
+        # API key：填新值＝覆蓋；清空按過「清除」＝刪除；留空＝維持
+        key_text = self.api_key_var.get().strip()
+        if key_text:
+            write_api_key(API_KEY_PATH, key_text)
+        elif getattr(self, "_api_key_dirty", False):
+            write_api_key(API_KEY_PATH, "")
 
         if not set_autostart(bool(self.autostart_var.get())):
             messagebox.showwarning(
@@ -2694,16 +2970,22 @@ class GlobalSettingsDialog(tk.Toplevel):
 
 
 class SettingsDialog(tk.Toplevel):
-    """口語化設定視窗：把技術參數翻譯成一般人看得懂的選項。"""
+    """口語化設定視窗：把技術參數翻譯成一般人看得懂的選項。
+
+    同一模型可以有多個「方案」（不同用途各存一套參數）；進階頁籤提供
+    完整參數（raw）與最終指令預覽，raw 非空時覆蓋所有 GUI 參數。"""
 
     def __init__(self, parent, app: LauncherApp, profile: dict):
         super().__init__(parent)
         self.app = app
         self.profile = profile
-        self.title(f"設定 — {profile.get('name','')}")
-        win_w, win_h = fit_window_size(self, S(640), S(560))
+        self.original_key = profile_key(profile)
+        scheme_text = "" if normalize_scheme(profile.get("scheme")) == DEFAULT_SCHEME \
+            else f" · {normalize_scheme(profile.get('scheme'))}"
+        self.title(f"設定 — {profile.get('name','')}{scheme_text}")
+        win_w, win_h = fit_window_size(self, S(700), S(620))
         self.geometry(f"{win_w}x{win_h}")
-        self.minsize(*fit_window_size(self, S(600), S(480), screen_ratio=1.0))
+        self.minsize(*fit_window_size(self, S(620), S(500), screen_ratio=1.0))
         self.resizable(True, True)
         self.transient(parent)
         self.grab_set()
@@ -2711,18 +2993,27 @@ class SettingsDialog(tk.Toplevel):
         # 底部按鈕列先 pack，固定保留空間，不會被上方內容擠出視窗。
         btns = tk.Frame(self, padx=16)
         btns.pack(side="bottom", fill="x", pady=(10, 16))
+        tk.Label(btns, text="同一模型可存多套參數（不同用途），按「另存新方案」複製一份。",
+                 font=("Segoe UI", 8), fg="#888").pack(side="left", fill="x", expand=True)
         tk.Button(
-            btns, text="儲存", command=self.save,
+            btns, text="另存新方案", command=self.save_as_new_scheme,
             font=("Segoe UI", 10, "bold"), width=12,
             bg="#2f6fed", fg="white",
             activebackground="#2456c0", activeforeground="white",
-            padx=16, pady=8,
+            padx=12, pady=8,
         ).pack(side="right")
+        tk.Button(
+            btns, text="儲存", command=self.save,
+            font=("Segoe UI", 10, "bold"), width=8,
+            bg="#2f6fed", fg="white",
+            activebackground="#2456c0", activeforeground="white",
+            padx=16, pady=8,
+        ).pack(side="right", padx=(0, 8))
         tk.Button(
             btns, text="取消", command=self.destroy,
             font=("Segoe UI", 10), width=12,
             padx=16, pady=8,
-        ).pack(side="right", padx=(0, 10))
+        ).pack(side="right", padx=(0, 8))
 
         root_body = tk.Frame(self)
         root_body.pack(side="top", fill="both", expand=True)
@@ -2741,6 +3032,18 @@ class SettingsDialog(tk.Toplevel):
         body = tab_model
         tk.Label(body, text=f"模型：{profile.get('name','')}",
                  font=("Segoe UI", 9), fg="#666", anchor="w").pack(anchor="w", pady=(0, 8))
+
+        # ---- 方案（同一模型的多套啟動參數）
+        tk.Label(body, text="方案名稱（同一模型可有多套參數，如 code / chat / agent）",
+                 font=("Segoe UI", 9), anchor="w").pack(fill="x", pady=(2, 2))
+        self.scheme_var = tk.StringVar(
+            value=normalize_scheme(profile.get("scheme")))
+        scheme_row = tk.Frame(body)
+        scheme_row.pack(fill="x")
+        tk.Entry(scheme_row, textvariable=self.scheme_var,
+                 font=("Segoe UI", 9)).pack(side="left", fill="x", expand=True, ipady=3)
+        tk.Button(scheme_row, text="另存為…", command=self.save_as_new_scheme,
+                  font=("Segoe UI", 9)).pack(side="left", padx=(6, 0))
 
         # ---- 視覺模型（mmproj）
         tk.Label(body, text="視覺模型（mmproj）", font=("Segoe UI", 9),
@@ -2804,13 +3107,18 @@ class SettingsDialog(tk.Toplevel):
         # ---- 思考模式
         tk.Label(body, text="思考模式（Reasoning / Thinking）", font=("Segoe UI", 9),
                  anchor="w").pack(fill="x", pady=(8, 2))
-        self.reasoning_var = tk.StringVar(value=profile.get("reasoning", "off"))
+        reasoning = str(profile.get("reasoning", "off")).strip().lower()
+        if reasoning not in {"on", "off", "auto"}:
+            reasoning = "off"
+        self.reasoning_var = tk.StringVar(value=reasoning)
         rf = tk.Frame(body)
         rf.pack(fill="x")
         tk.Radiobutton(rf, text="關閉（回應較快）", variable=self.reasoning_var,
                        value="off").pack(side="left")
         tk.Radiobutton(rf, text="開啟（會先想再回答，較慢）", variable=self.reasoning_var,
                        value="on").pack(side="left")
+        tk.Radiobutton(rf, text="auto（依模型模板）", variable=self.reasoning_var,
+                       value="auto").pack(side="left")
 
         # ---- 思考強度
         tk.Label(body, text="思考強度（Reasoning effort）", font=("Segoe UI", 9),
@@ -2846,6 +3154,15 @@ class SettingsDialog(tk.Toplevel):
             body, textvariable=self.mtp_var, values=["Off", "On"],
             state="readonly")
         self.mtp_combo.pack(fill="x")
+        mtp_row = tk.Frame(body)
+        mtp_row.pack(fill="x", pady=(2, 0))
+        tk.Label(mtp_row, text="--spec-draft-n-max", font=("Consolas", 9),
+                 fg="#888").pack(side="left")
+        self.spec_n_max_var = tk.StringVar(value=str(profile.get("spec_draft_n_max") or ""))
+        tk.Entry(mtp_row, textvariable=self.spec_n_max_var, width=6,
+                 font=("Consolas", 9)).pack(side="left", padx=(6, 0))
+        tk.Label(mtp_row, text="每輪猜測 token 數；留空＝llama.cpp 預設（MTP 建議 5）",
+                 font=("Segoe UI", 8), fg="#888").pack(side="left", padx=(8, 0))
 
         # ---- Jinja chat template
         tk.Label(body, text="Jinja 聊天模板", font=("Segoe UI", 9),
@@ -2911,21 +3228,50 @@ class SettingsDialog(tk.Toplevel):
         # ---- 並行請求
         tk.Label(body, text="同時服務幾個請求", font=("Segoe UI", 9),
                  anchor="w").pack(fill="x", pady=(8, 2))
-        self.parallel_var = tk.StringVar(value="1")
-        try:
-            extra = profile.get("extra_args", "") or ""
-            parts = extra.split()
-            if "--parallel" in parts:
-                i = parts.index("--parallel")
-                if i + 1 < len(parts):
-                    self.parallel_var.set(parts[i + 1])
-        except Exception:
-            pass
+        self.parallel_var = tk.StringVar(value=str(parallel_from_profile(profile)))
         pr = tk.Frame(body)
         pr.pack(fill="x")
         for val, label in [("1", "1（一般）"), ("2", "2"), ("4", "4")]:
             tk.Radiobutton(pr, text=label, variable=self.parallel_var,
                            value=val).pack(side="left")
+
+        # ---- 其他 runtime 選項（留空／auto＝llama.cpp 預設）
+        tk.Label(body, text="其他加速選項（auto／留空＝llama.cpp 預設）",
+                 font=("Segoe UI", 9), anchor="w").pack(fill="x", pady=(8, 2))
+        opt_grid = tk.Frame(body)
+        opt_grid.pack(fill="x")
+        flash_attn = str(profile.get("flash_attn") or "auto").strip().lower()
+        if flash_attn not in {"auto", "on", "off"}:
+            flash_attn = "auto"
+        self.flash_attn_var = tk.StringVar(value=flash_attn)
+        tk.Label(opt_grid, text="Flash Attention：", font=("Segoe UI", 9),
+                 anchor="e").grid(row=0, column=0, sticky="e")
+        ttk.Combobox(opt_grid, textvariable=self.flash_attn_var,
+                     values=["auto", "on", "off"], state="readonly",
+                     width=7).grid(row=0, column=1, sticky="w", padx=(6, 0))
+        self.kv_unified_var = tk.BooleanVar(value=bool(profile.get("kv_unified", True)))
+        self.fit_var = tk.BooleanVar(value=str(profile.get("fit") or "on").strip() != "off")
+        tk.Checkbutton(opt_grid, text="KV 統一緩衝（--kv-unified，需搭配 RAM cache）",
+                       variable=self.kv_unified_var, anchor="w",
+                       font=("Segoe UI", 9)).grid(row=1, column=0, columnspan=2, sticky="w")
+        tk.Checkbutton(opt_grid, text="自動調整未設定參數以塞進顯存（--fit，預設開）",
+                       variable=self.fit_var, anchor="w",
+                       font=("Segoe UI", 9)).grid(row=2, column=0, columnspan=2, sticky="w")
+        num_grid = tk.Frame(body)
+        num_grid.pack(fill="x", pady=(6, 0))
+        self.threads_var = tk.StringVar(value=str(profile.get("threads") or ""))
+        self.threads_batch_var = tk.StringVar(value=str(profile.get("threads_batch") or ""))
+        self.ctx_checkpoints_var = tk.StringVar(value=str(profile.get("ctx_checkpoints") or ""))
+        for row, (label, var) in enumerate((
+                ("Threads（CPU 執行緒）", self.threads_var),
+                ("Threads-batch（batch 執行緒）", self.threads_batch_var),
+                ("Context checkpoints", self.ctx_checkpoints_var))):
+            tk.Label(num_grid, text=label, font=("Segoe UI", 8),
+                     fg="#888").grid(row=row, column=0, sticky="w")
+            tk.Entry(num_grid, textvariable=var, width=8,
+                     font=("Consolas", 9)).grid(row=row, column=1, sticky="w")
+        tk.Label(body, text="留空＝不傳該參數，由 llama.cpp 用預設值。",
+                 font=("Segoe UI", 8), fg="#888", anchor="w").pack(anchor="w")
 
         # ---- GPU offload 層數（-ngl）
         tk.Label(body, text="GPU 卸載層數（-ngl）", font=("Segoe UI", 9),
@@ -2963,6 +3309,33 @@ class SettingsDialog(tk.Toplevel):
         # ============ 頁籤三：進階 ============
         body = tab_adv
 
+        # ---- 採樣預設（server 端 completion 預設值）
+        tk.Label(body, text="採樣預設（server 端預設值；留空＝llama.cpp 預設）",
+                 font=("Segoe UI", 9), anchor="w").pack(fill="x", pady=(8, 2))
+        sam_grid = tk.Frame(body)
+        sam_grid.pack(fill="x")
+        self.temp_var = tk.StringVar(value=str(profile.get("temp") or ""))
+        self.top_p_var = tk.StringVar(value=str(profile.get("top_p") or ""))
+        self.top_k_var = tk.StringVar(value=str(profile.get("top_k") or ""))
+        self.min_p_var = tk.StringVar(value=str(profile.get("min_p") or ""))
+        self.presence_penalty_var = tk.StringVar(
+            value=str(profile.get("presence_penalty") or ""))
+        self.repeat_penalty_var = tk.StringVar(
+            value=str(profile.get("repeat_penalty") or ""))
+        sampling_fields = (
+            ("Temp", self.temp_var), ("Top-P", self.top_p_var),
+            ("Top-K", self.top_k_var), ("Min-P", self.min_p_var),
+            ("Presence Penalty", self.presence_penalty_var),
+            ("Repeat Penalty", self.repeat_penalty_var),
+        )
+        for i, (label, var) in enumerate(sampling_fields):
+            row, col = divmod(i, 2)
+            tk.Label(sam_grid, text=label, font=("Segoe UI", 8),
+                     fg="#888").grid(row=row, column=col * 2, sticky="w")
+            tk.Entry(sam_grid, textvariable=var, width=7,
+                     font=("Consolas", 9)).grid(row=row, column=col * 2 + 1,
+                                                sticky="w", padx=(4, 16))
+
         # ---- 進階參數（extra args）
         tk.Label(body, text="進階參數（extra args）", font=("Segoe UI", 9),
                  anchor="w").pack(fill="x", pady=(8, 2))
@@ -2970,87 +3343,215 @@ class SettingsDialog(tk.Toplevel):
         tk.Entry(body, textvariable=self.extra_args_var,
                  font=("Consolas", 9)).pack(fill="x", ipady=3)
         tk.Label(body, text="給進階使用者：直接編輯額外的 llama-server 參數。"
-                            "KV 快取、並行數、Jinja 由上方選項管理，會自動保留。",
+                            "KV 快取、並行數、Jinja 由上方選項管理，會自動剔除重複。"
+                            "KV 選「自訂」時，這裡的 -ctk/-ctv 會原樣保留。",
                  font=("Segoe UI", 8), fg="#888", anchor="w",
-                 wraplength=540, justify="left").pack(anchor="w", pady=(2, 0))
+                 wraplength=600, justify="left").pack(anchor="w", pady=(2, 0))
 
-    def save(self):
-        """把口語選項寫回 profile 並存檔（全域設定在主畫面 Settings）。"""
-        p = self.profile
-        try:
-            ctx_val = parse_context_k(self.ctx_var.get())
-        except ValueError as exc:
-            messagebox.showerror("Context格式錯誤", str(exc), parent=self)
-            return
+        # ---- 完整參數（raw，bat 式全權控制）
+        tk.Label(body, text="完整啟動參數（raw；非空時覆蓋上方所有選項，bat 式）",
+                 font=("Segoe UI", 9), anchor="w").pack(fill="x", pady=(8, 2))
+        self.raw_args_var = tk.StringVar(value=profile.get("raw_args", "") or "")
+        raw_frame = tk.Frame(body)
+        raw_frame.pack(fill="x")
+        self.raw_args_text = tk.Text(raw_frame, height=4, font=("Consolas", 9),
+                                     wrap="none")
+        raw_sb = tk.Scrollbar(raw_frame, command=self.raw_args_text.yview)
+        self.raw_args_text.configure(yscrollcommand=raw_sb.set)
+        raw_sb.pack(side="right", fill="y")
+        self.raw_args_text.pack(side="left", fill="both", expand=True)
+        self.raw_args_text.insert("1.0", self.raw_args_var.get())
+        self.raw_args_text.bind("<KeyRelease>", lambda _e: self._update_preview())
+        self.raw_args_text.bind("<FocusOut>", lambda _e: self._update_preview())
+
+        # ---- 最終指令預覽
+        tk.Label(body, text="最終啟動指令預覽（實際會執行的完整參數）",
+                 font=("Segoe UI", 9), anchor="w").pack(fill="x", pady=(8, 2))
+        prev_frame = tk.Frame(body)
+        prev_frame.pack(fill="x")
+        self.preview_text = tk.Text(prev_frame, height=6, font=("Consolas", 8),
+                                    state="disabled", bg="#10141c", fg="#d5dbe5",
+                                    wrap="none")
+        prev_sb = tk.Scrollbar(prev_frame, command=self.preview_text.yview)
+        self.preview_text.configure(yscrollcommand=prev_sb.set)
+        prev_sb.pack(side="right", fill="y")
+        self.preview_text.pack(side="left", fill="both", expand=True)
+        self.after(100, self._update_preview)
+
+    # ---------------- 參數收集／預覽
+    def _collect_fields(self, silent: bool = False) -> dict | None:
+        """把視窗欄位收集成 profile dict（不含 scheme）；驗證失敗回 None。"""
+        p = dict(self.profile)
+        # mmproj / vision
         mmproj = self.mmproj_var.get().strip()
-        mmproj = "" if mmproj == "（無 vision）" else mmproj
-        if mmproj and not model_file(mmproj).exists():
-            messagebox.showerror(
-                "視覺模型不存在",
-                f"找不到 models\\{mmproj}。\n請重新掃描或選擇正確的 GGUF 檔。",
-                parent=self)
-            return
-
-        p["default_ctx"] = ctx_val
+        p["mmproj"] = "" if mmproj == "（無 vision）" else mmproj
+        p["vision_enabled"] = bool(p["mmproj"] and self.vision_enabled_var.get())
+        # context
+        try:
+            p["default_ctx"] = parse_context_k(self.ctx_var.get())
+        except ValueError as exc:
+            if not silent:
+                messagebox.showwarning("Context格式錯誤", str(exc), parent=self)
+            return None
+        p["backend"] = self.backend_var.get().lower()
+        # reasoning
         p["reasoning"] = self.reasoning_var.get()
         p["reasoning_effort"] = reasoning_effort_value(
             {"reasoning_effort": self.reasoning_effort_var.get()})
+        # 顯示卡分配
         gpu_label = self.gpu_var.get()
         if gpu_label == "自訂層數分配…":
-            # combo 只選了選項但沒輸入數值：直接取暫存的自訂值
-            p["gpu_split"] = self.gpu_custom_var.get().strip()
+            gpu_value = self.gpu_custom_var.get().strip()
         elif gpu_label.startswith("自訂："):
-            p["gpu_split"] = gpu_label[3:].strip()
+            gpu_value = gpu_label.split("：", 1)[1].strip()
+        elif gpu_label == "自動（讓程式決定）":
+            gpu_value = ""
         else:
-            p["gpu_split"] = gpu_label_to_value(gpu_label)
-        # 自訂分配加入全域常用清單，之後每個模型的設定都能直接選
-        remember_gpu_preset(p["gpu_split"])
-        p["backend"] = self.backend_var.get().lower()
-        p["mtp"] = self.mtp_var.get() == "On"
-        p["jinja"] = self.jinja_var.get()
-        p["mmproj"] = mmproj
-        p["vision_enabled"] = bool(mmproj) and self.vision_enabled_var.get()
-
-        # 組 extra_args：GUI 管理的 KV/parallel 由選項產生；
-        # 使用者在進階參數框輸入的其他參數（-b/-ub 等）保留。
-        extra = preserve_unmanaged_extra_args(self.extra_args_var.get())
-        kv_label = self.kv_var.get()
-        kv_mode = next((value for label, value in KV_OPTIONS if label == kv_label), "q4")
-        p["kv_mode"] = kv_mode
-        if kv_mode == "q4":
-            extra += ["-ctk", "q4_0", "-ctv", "q4_0"]
-        elif kv_mode == "iq4_nl":
-            extra += ["-ctk", "iq4_nl", "-ctv", "iq4_nl"]
-        else:
-            extra += ["-ctk", "f16", "-ctv", "f16"]
-        extra += ["--parallel", self.parallel_var.get()]
-        p["extra_args"] = " ".join(extra)
-
-        # GPU 卸載層數
+            gpu_value = gpu_label_to_value(gpu_label)
+        if gpu_value:
+            remember_gpu_preset(gpu_value)
+        p["gpu_split"] = gpu_value
+        # KV 模式
+        p["kv_mode"] = next((v for label, v in KV_OPTIONS
+                             if label == self.kv_var.get()), "q4")
+        p["parallel"] = int(self.parallel_var.get() or 1)
+        # ngl：combo 值為「全部（999）」/「64」/「32」/「16」/自訂數字字串
         ngl_label = self.ngl_var.get()
         if ngl_label == "全部（999）":
             p["ngl"] = 999
         elif ngl_label.isdigit():
-            p["ngl"] = int(ngl_label)
+            p["ngl"] = max(1, int(ngl_label))
         else:
-            p["ngl"] = int(self.ngl_custom_var.get() or 999)
+            try:
+                p["ngl"] = max(1, int(self.ngl_custom_var.get() or 999))
+            except ValueError:
+                if not silent:
+                    messagebox.showwarning("NGL 格式錯誤", "請輸入整數層數", parent=self)
+                return None
+        # 加速選項
+        p["mtp"] = self.mtp_var.get() == "On"
+        n_max = self.spec_n_max_var.get().strip()
+        p["spec_draft_n_max"] = n_max
+        p["jinja"] = self.jinja_var.get()
+        p["flash_attn"] = self.flash_attn_var.get()
+        p["kv_unified"] = self.kv_unified_var.get()
+        p["fit"] = "on" if self.fit_var.get() else "off"
+        p["threads"] = self.threads_var.get().strip()
+        p["threads_batch"] = self.threads_batch_var.get().strip()
+        p["ctx_checkpoints"] = self.ctx_checkpoints_var.get().strip()
+        # 進階參數：GUI 管理項由選項重組，其餘原樣保留
+        extra = preserve_unmanaged_extra_args(
+            self.extra_args_var.get(), manage_kv=(p["kv_mode"] != "custom"))
+        p["extra_args"] = " ".join(extra)
+        # 採樣預設
+        p["temp"] = self.temp_var.get().strip()
+        p["top_p"] = self.top_p_var.get().strip()
+        p["top_k"] = self.top_k_var.get().strip()
+        p["min_p"] = self.min_p_var.get().strip()
+        p["presence_penalty"] = self.presence_penalty_var.get().strip()
+        p["repeat_penalty"] = self.repeat_penalty_var.get().strip()
+        # raw 完整參數
+        p["raw_args"] = self.raw_args_text.get("1.0", "end").strip()
+        # 保留置頂狀態
+        p["starred"] = bool(self.profile.get("starred", False))
+        if p["starred"] and self.profile.get("favorite_order") is not None:
+            p["favorite_order"] = self.profile.get("favorite_order")
+        return p
 
-        # 存回 cfg
+    def _update_preview(self, *_args):
+        """重建「最終啟動指令預覽」；欄位有誤時顯示錯誤而不是崩掉。"""
+        if getattr(self, "preview_text", None) is None or not self.preview_text.winfo_exists():
+            return
+        p = self._collect_fields(silent=True)
+        binary = VULKAN_SERVER if p.get("backend") == "vulkan" else LLAMA_SERVER
+        if p is None:
+            text = "（Context 欄位格式有誤，無法組裝預覽）"
+        else:
+            try:
+                ctx = parse_context_k(self.ctx_var.get())
+                mmproj = model_file(p["mmproj"]) if p.get("mmproj") else None
+                args = build_server_args(
+                    p, ctx, current_server_settings(), model_file(p["model"]),
+                    mmproj)
+                text = format_command(binary, args)
+            except Exception as exc:
+                text = f"（預覽失敗：{exc}）"
+        self.preview_text.config(state="normal")
+        self.preview_text.delete("1.0", "end")
+        self.preview_text.insert("end", text)
+        self.preview_text.config(state="disabled")
+
+    def save(self):
+        self._save_current_scheme()
+
+    def _save_current_scheme(self):
+        p = self._collect_fields()
+        if p is None:
+            return
+        scheme = normalize_scheme(self.scheme_var.get())
+        new_key = (p["model"], scheme)
+        cfg = self.app.cfg
+        cfg.setdefault("profiles", [])
+        for sp in cfg["profiles"]:
+            if profile_key(sp) == new_key and new_key != self.original_key:
+                messagebox.showerror(
+                    "方案名稱重複",
+                    f"「{scheme}」已存在。\n請換一個名稱，或先用「另存新方案」建立新方案。",
+                    parent=self)
+                return
+        p["scheme"] = scheme
+        self._persist_to_cfg(p)
+        self.original_key = new_key
+        self.app.refresh_listbox(new_key)
+        self.app.update_detail()
+        self.destroy()
+        messagebox.showinfo("已儲存", f"設定已更新（方案：{scheme}）。")
+
+    def save_as_new_scheme(self):
+        """把目前欄位值複製成一個新方案。"""
+        p = self._collect_fields()
+        if p is None:
+            return
+        name = simpledialog.askstring(
+            "另存新方案",
+            "新方案名稱（例如 code / chat / agent）：",
+            initialvalue=normalize_scheme(self.scheme_var.get()), parent=self)
+        if name is None:
+            return
+        scheme = normalize_scheme(name)
+        if scheme == self.original_key[1]:
+            messagebox.showerror(
+                "名稱重複", "新方案名稱不能與目前方案相同。", parent=self)
+            return
+        cfg = self.app.cfg
+        cfg.setdefault("profiles", [])
+        if any(profile_key(sp) == (p["model"], scheme) for sp in cfg["profiles"]):
+            messagebox.showerror("方案名稱重複", f"「{scheme}」已存在。", parent=self)
+            return
+        p["scheme"] = scheme
+        p["starred"] = False
+        p.pop("favorite_order", None)
+        self._persist_to_cfg(p)
+        # 切換到新方案繼續編輯
+        self.original_key = (p["model"], scheme)
+        self.profile = p
+        self.scheme_var.set(scheme)
+        self.app.refresh_listbox(self.original_key)
+        self.app.update_detail()
+        messagebox.showinfo("已建立", f"已建立新方案「{scheme}」，可繼續調整。")
+
+    def _persist_to_cfg(self, p: dict):
+        key = profile_key(p)
         cfg = self.app.cfg
         cfg.setdefault("profiles", [])
         for i, sp in enumerate(cfg["profiles"]):
-            if sp.get("model") == p["model"]:
+            if profile_key(sp) == key:
                 cfg["profiles"][i] = dict(p)
                 break
         else:
             cfg["profiles"].append(dict(p))
         save_config(cfg)
         self.app.profiles = merge_profiles(cfg)
-        self.app.refresh_listbox()
-        self.app.update_detail()
-        self.destroy()
-        messagebox.showinfo("已儲存", "設定已更新。")
-
 
 class AddModelDialog(tk.Toplevel):
     """加入新模型：名稱 + GGUF + mmproj（可空）+ 預設 ctx + reasoning + 思考強度。"""
@@ -3163,7 +3664,18 @@ class AddModelDialog(tk.Toplevel):
             messagebox.showwarning(
                 "視覺模型不存在", f"models\\{mmproj} 不存在，請確認檔名", parent=self)
             return
-        profile = {
+        cfg = self.app.cfg
+        cfg.setdefault("profiles", [])
+        existing = [p for p in cfg["profiles"] if p.get("model") == model]
+        if existing:
+            messagebox.showerror(
+                "模型已存在",
+                f"「{model}」已在清單中（{len(existing)} 個方案）。\n\n"
+                "要加另一套參數：選該模型 →「Settings」→「另存新方案」。",
+                parent=self)
+            return
+        profile = dict(DEFAULT_PROFILE)
+        profile.update({
             "name": name,
             "model": model,
             "mmproj": mmproj,
@@ -3172,13 +3684,7 @@ class AddModelDialog(tk.Toplevel):
             "reasoning": self.reasoning_var.get(),
             "reasoning_effort": reasoning_effort_value(
                 {"reasoning_effort": self.reasoning_effort_var.get()}),
-            "gpu_split": "16,8",
-            "backend": "cuda",
-            "extra_args": "-ctk q4_0 -ctv q4_0 --parallel 1",
-        }
-        cfg = self.app.cfg
-        cfg.setdefault("profiles", [])
-        cfg["profiles"] = [p for p in cfg["profiles"] if p.get("model") != model]
+        })
         cfg["profiles"].append(profile)
         save_config(cfg)
         invalidate_model_inventory()

@@ -170,8 +170,15 @@ def test_dashboard_html_prevents_mobile_text_overflow(app_mod):
     assert "html,body{max-width:100%;overflow-x:hidden}" in html
 
 
-def test_end_to_end_control_api_over_http(app_mod):
+def test_end_to_end_control_api_over_http(app_mod, monkeypatch):
     """Real ControlServer over HTTP: token auth + DOM-safe profile rendering."""
+    # 用隨機空閒 port：開發機上常有正在運行的 LlamaLauncher 佔住 8765，
+    # Windows 的 SO_REUSEADDR 語義會讓測試 server 也綁定成功、
+    # 連線被分流到舊 server → 401。改用空閒 port 就與運行中的實例無衝突。
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        free_port = probe.getsockname()[1]
+    monkeypatch.setattr(app_mod, "CONTROL_PORT", free_port)
     app = _make_app(app_mod)
     app.profiles = [
         {"name": "Evil<script><img src=x>", "model": "xss.gguf",
