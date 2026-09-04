@@ -913,15 +913,16 @@ class ServerManager:
         self.log_path = LOGS_DIR / f"llama-server-{ts}.log"
         self.log_fh = open(self.log_path, "wb", buffering=0)
         # 寫入啟動指令（方便之後查用了什麼參數）
+        full_command = format_command(windows_server, args)
         header = (f"# {datetime.now().isoformat()}  {profile.get('name','')}\n"
                   f"# {self.preflight_summary}\n"
-                  f"# {' '.join(args)}\n"
+                  f"# {full_command}\n"
                   f"{'='*80}\n").encode("utf-8")
         self.log_fh.write(header)
 
         try:
             self.proc = subprocess.Popen(
-                args,
+                [str(windows_server)] + args,
                 cwd=str(launch_cwd),
                 stdout=self.log_fh,
                 stderr=subprocess.STDOUT,
