@@ -11,7 +11,7 @@ import threading
 import pytest
 
 
-from conftest import require_display
+from conftest import require_tk
 
 def _import_app(tmp_path, monkeypatch):
     """Import llama_launcher.app with an isolated data and model dir
@@ -134,7 +134,7 @@ def _full_app(app_mod, monkeypatch):
     monkeypatch.setattr(app_mod.messagebox, "showinfo", lambda *a, **k: None)
     monkeypatch.setattr(app_mod.messagebox, "showwarning", lambda *a, **k: None)
     monkeypatch.setattr(app_mod.messagebox, "showerror", lambda *a, **k: None)
-    root = app_mod.tk.Tk()
+    root = require_tk(app_mod.tk)
     app = app_mod.LauncherApp(root)
     return root, app
 
@@ -186,12 +186,11 @@ def _fake_app(app_mod, profile):
 
 
 def test_settings_dialog_saves_reasoning_effort(app_mod, monkeypatch):
-    require_display()
     monkeypatch.setattr(app_mod.messagebox, "showinfo", lambda *a, **k: None)
     monkeypatch.setattr(app_mod.messagebox, "showerror", lambda *a, **k: None)
     profile = _base_profile(reasoning="on")
     app = _fake_app(app_mod, profile)
-    root = app_mod.tk.Tk()
+    root = require_tk(app_mod.tk)
     try:
         dlg = app_mod.SettingsDialog(root, app, dict(profile))
         try:
@@ -213,12 +212,11 @@ def test_settings_dialog_saves_reasoning_effort(app_mod, monkeypatch):
 
 
 def test_settings_dialog_disables_effort_when_thinking_off(app_mod, monkeypatch):
-    require_display()
     monkeypatch.setattr(app_mod.messagebox, "showinfo", lambda *a, **k: None)
     monkeypatch.setattr(app_mod.messagebox, "showerror", lambda *a, **k: None)
     profile = _base_profile(reasoning="off", reasoning_effort="high")
     app = _fake_app(app_mod, profile)
-    root = app_mod.tk.Tk()
+    root = require_tk(app_mod.tk)
     try:
         dlg = app_mod.SettingsDialog(root, app, dict(profile))
         try:
@@ -235,11 +233,10 @@ def test_settings_dialog_disables_effort_when_thinking_off(app_mod, monkeypatch)
 
 
 def test_add_model_dialog_defaults(app_mod, monkeypatch):
-    require_display()
     monkeypatch.setattr(app_mod.messagebox, "showinfo", lambda *a, **k: None)
     monkeypatch.setattr(app_mod.messagebox, "showwarning", lambda *a, **k: None)
     app = _fake_app(app_mod, _base_profile())
-    root = app_mod.tk.Tk()
+    root = require_tk(app_mod.tk)
     try:
         dlg = app_mod.AddModelDialog(root, app)
         try:

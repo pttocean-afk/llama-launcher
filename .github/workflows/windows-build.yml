@@ -33,12 +33,12 @@ jobs:
         with:
           name: LlamaLauncher-Windows-x64
           path: |
-            dist/LlamaLauncher-Portable-x64.zip
-            dist/LlamaLauncher-Setup-x64.exe
+            dist/LlamaLauncher-Portable-*-x64.zip
+            dist/LlamaLauncher-Setup-*-x64.exe
       - name: Publish tagged release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/LlamaLauncher-Portable-x64.zip
-            dist/LlamaLauncher-Setup-x64.exe
+            dist/LlamaLauncher-Portable-*-x64.zip
+            dist/LlamaLauncher-Setup-*-x64.exe

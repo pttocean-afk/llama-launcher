@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from conftest import require_display
+from conftest import require_tk
 
 
 def _import_app(tmp_path, monkeypatch):
@@ -45,8 +45,7 @@ def _is_descendant(widget, ancestor):
 
 
 def test_global_settings_has_four_short_tabs(app_mod):
-    require_display()
-    root = app_mod.tk.Tk()
+    root = require_tk(app_mod.tk)
     root.withdraw()
     try:
         dialog = app_mod.GlobalSettingsDialog(root, _fake_app())
@@ -70,8 +69,7 @@ def test_global_settings_has_four_short_tabs(app_mod):
 
 
 def test_global_settings_saves_chinese_preflight_label(app_mod):
-    require_display()
-    root = app_mod.tk.Tk()
+    root = require_tk(app_mod.tk)
     root.withdraw()
     try:
         dialog = app_mod.GlobalSettingsDialog(root, _fake_app())
@@ -88,11 +86,10 @@ def test_global_settings_saves_chinese_preflight_label(app_mod):
 
 
 def test_global_settings_rejects_bad_cache_ram(app_mod, monkeypatch):
-    require_display()
     errors = []
     monkeypatch.setattr(app_mod.messagebox, "showerror",
                         lambda *a, **k: errors.append(a))
-    root = app_mod.tk.Tk()
+    root = require_tk(app_mod.tk)
     root.withdraw()
     try:
         dialog = app_mod.GlobalSettingsDialog(root, _fake_app())

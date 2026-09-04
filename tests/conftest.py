@@ -4,15 +4,13 @@ import tkinter
 import pytest
 
 
-def require_display():
-    """Skip the calling test when no usable desktop session exists.
+def require_tk(tk_module=tkinter):
+    """建立測試實際使用的 Tk root；桌面不可用時直接 skip。
 
-    開發機的螢幕被鎖住／無頭環境下，tkinter 的 Tk() 會拋 TclError
-    （「tk wasn't installed properly」的假象）。這種情況不是程式問題，
-    跳過而不是失敗，讓本機打包不受螢幕鎖定狀態影響。
+    不先建立探測用 root 再建立第二個，避免 Windows 在兩步之間鎖屏時
+    產生競態（第一個成功、第二個拋 TclError）。
     """
     try:
-        root = tkinter.Tk()
-        root.destroy()
-    except tkinter.TclError:
+        return tk_module.Tk()
+    except tk_module.TclError:
         pytest.skip("no available desktop session for tkinter")
