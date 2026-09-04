@@ -16,8 +16,8 @@
 
 跑本機 `llama.cpp` 其實很繁瑣：要記得一堆參數、在 terminal 看 log、手動管理 GPU 分配、還想從手機連回來。**Llama Launcher** 把這些全部包起來：
 
-- ✅ 把各模型存成 profile，一鍵啟動／停止
-- ✅ 自動接管已在跑的 `llama-server --port 8080`，不重啟、不停你的東西
+- ✅ 把各模型存成 profile（同一模型可多套方案），一鍵啟動／停止
+- ✅ 自動接管已在跑的 `llama-server`（port 可設定），不重啟、不停你的東西
 - ✅ 整合 Log 檢視，看到 `Vulkan` fallback 還會主動提醒並停止
 - ✅ **Tailscale 遠端控制**：從手機／別台電腦安全的連回來
 - ✅ **硬體能力地圖**：比較模型／版本／Backend／Vision 的 Context 上限與速度取捨
@@ -29,16 +29,21 @@
 | 功能 | 說明 |
 |---|---|
 | 🗂️ Model profiles | 每個模型的 context、GPU 分配、KV 精度、reasoning、思考強度、vision 各自獨立存檔 |
-| 🗂️ 分頁設定 | 模型設定採「模型／加速／進階」三頁籤，長表單不再把選項擠出視窗 |
-| 🧠 思考強度 | llama.cpp `--reasoning-effort`（default/minimal/low/medium/high/xhigh/max），思考模式開啟時可選 |
-| 🎮 GPU 分配 | 自動，或自訂各卡層數（如 `16,8`），常用分配自動記住、可刪除 |
-| 🚀 一鍵啟動 | 幫你組好 `-ngl -c -ts -ctk/ctv --parallel --reasoning-effort` 等參數，直接 launch |
+| 🧩 多方案（scheme） | 同一模型可存多套啟動參數（如 預設 / code / chat），「另存新方案」一鍵複製；遠端 API 可依方案啟動 |
+| 🖥️ 全域伺服器參數 | host / port / alias / API key 在全域設定一次設定、對所有模型生效；API key 存於 `secrets/`，不寫進設定檔 |
+| 🛡️ VRAM 預檢（三級） | 預設關閉；可設「只警告」或「嚴格」（清理指定程序＋ComfyUI、超時擋住並列出佔用程序），單卡也能正常檢查 |
+| 🧠 思考模式 | `--reasoning` on/off/auto、`--reasoning-effort`、`--reasoning-format`、`--reasoning-preserve` |
+| ⚡ MTP 猜測解碼 | `--spec-type draft-mtp` 加 `--spec-draft-n-max`（每輪猜測 token 數）可調 |
+| 🎮 GPU 分配 | 自動，或自訂各卡層數（如 `16,8`），常用分配自動記住、可刪除；Vulkan `--device` 依 GPU 數自動 |
+| 🚀 一鍵啟動 | 幫你組好 `-ngl -c -ts -ctk/ctv --parallel` 等參數；KV 選 Q8 就傳 `q8_0`，自訂型別不會被靜默改寫 |
+| 🧪 更多參數 | `--flash-attn`、`--kv-unified`、`--fit`、`--threads/-batch`、`--ctx-checkpoints`、採樣預設（temp/top-p/top-k/min-p/penalties） |
+| 📝 完整參數（raw） | 進階頁可貼 bat 式完整參數列，非空時覆蓋所有 GUI 選項；下方「最終指令預覽」顯示實際會執行的完整指令 |
 | 📄 即時 Log | 內嵌 log 面板，偵測到 Vulkan 慢速退化會警告 |
-| 🔌 Process 接管 | 偵測既有的 8080 llama-server，直接納管，不重啟 |
+| 🔌 Process 接管 | 偵測既有的（設定 port 的）llama-server，直接納管，不重啟 |
 | 📶 Tailscale Serve | HTTPS 遠端控制頁＋Bearer token，只綁 localhost 再透過 Tailscale 代理 |
-| 💼 全域／個別設定分離 | 開機啟動、llama.cpp 路徑、遠端存取＝全域；模型參數＝個別 |
+| 💼 全域／個別設定分離 | 開機啟動、llama.cpp 路徑、伺服器參數、VRAM 預檢、遠端存取＝全域；模型參數＝個別 |
 | ♻️ 舊資料遷移 | 從舊版 launcher 匯入 profiles／token，一鍵搬家 |
-| 📦 Profile 匯出／匯入 | 可攜 JSON（不含本機路徑），換機/分享輕鬆 |
+| 📦 Profile 匯出／匯入 | 可攜 JSON（不含本機路徑），含方案名，換機/分享輕鬆 |
 | 📊 硬體能力與模型選型 | 依 llama.cpp build、模型、Backend、Vision 彙整最大已驗證 Context、穩定速度、疊加曲線與 Pareto 取捨圖 |
 
 ---
@@ -81,7 +86,7 @@
    - **控制 Token**（私人字串）
 4. 手機／別台電腦開網址 → 貼 Token → 即可看狀態、選模型、啟動／停止
 
-**安全設計**：控制 API 只綁 `127.0.0.1:8765`，對外一律透過 Tailscale Serve HTTPS 代理；`/api/*` 全需 Bearer token。推理埠 `8080` 不直接暴露。
+**安全設計**：控制 API 只綁 `127.0.0.1:8765`，對外一律透過 Tailscale Serve HTTPS 代理；`/api/*` 全需 Bearer token。推理埠（可設定，預設 `8080`）不直接暴露。
 
 ---
 
@@ -180,8 +185,17 @@ GPU split, and remote access are a pain. **Llama Launcher** wraps it all up:
 
 - **Model profiles** — save each model's context, GPU split, KV precision,
   reasoning, and vision settings independently, then launch with one click.
-- **Process adoption** — detects an already-running `llama-server --port 8080`
-  and manages it without a restart.
+- **Per-model schemes** — keep several launch-parameter sets per model
+  (e.g. default / code / chat); "Save as new scheme" duplicates one in a click.
+- **Global server settings** — host / port / alias / API key set once, applied
+  to every model; the API key lives under `secrets/`, never in the config file.
+- **3-level VRAM preflight** — off by default; "warn" or "strict" (cleans
+  configured processes + ComfyUI, blocks on timeout and lists the owners).
+  Works with a single GPU too.
+- **Raw args + command preview** — paste a full bat-style arg line to override
+  everything, with a live preview of the exact command that will run.
+- **Process adoption** — detects an already-running `llama-server` on the
+  configured port and manages it without a restart.
 - **Integrated log panel** — warnings when the Vulkan runtime falls back to a
   slow no-parallel-pipeline mode.
 - **Tailscale remote control** — a secure HTTPS control page (Bearer token)
@@ -193,16 +207,21 @@ GPU split, and remote access are a pain. **Llama Launcher** wraps it all up:
 | Feature | Description |
 |---|---|
 | Model profiles | Per-model context / GPU split / KV / reasoning / thinking intensity / vision |
-| Tabbed settings | Per-model dialog uses Model / Performance / Advanced tabs — long forms no longer overflow the window |
-| Thinking intensity | llama.cpp `--reasoning-effort` (default/minimal/low/medium/high/xhigh/max), chosen when reasoning is on |
-| GPU split | Auto, or custom layers per GPU (e.g. `16,8`); presets remembered & removable |
-| One-click start | Builds `-ngl -c -ts -ctk/ctv --parallel --reasoning-effort` args for you |
+| Schemes | Multiple parameter sets per model (default / code / chat); remote API can start a specific scheme |
+| Global server params | host / port / alias / API key set once for all models; API key stored under `secrets/` |
+| VRAM preflight | Off by default; "warn" or "strict" with configurable limits, kill-list and ComfyUI stop |
+| Reasoning | `--reasoning` on/off/auto, `--reasoning-effort`, `--reasoning-format`, `--reasoning-preserve` |
+| MTP | `--spec-type draft-mtp` with tunable `--spec-draft-n-max` |
+| GPU split | Auto, or custom layers per GPU (e.g. `16,8`); presets remembered & removable; Vulkan `--device` auto |
+| One-click start | Builds `-ngl -c -ts -ctk/ctv --parallel` args; KV "Q8" passes `q8_0`, custom types are never rewritten |
+| More params | `--flash-attn`, `--kv-unified`, `--fit`, `--threads/-batch`, `--ctx-checkpoints`, sampling defaults |
+| Raw args | Bat-style full arg line overrides all GUI options, with a live final-command preview |
 | Live logs | Embedded log viewer with Vulkan-fallback warnings |
-| Process adoption | Manages an existing 8080 server without restarting it |
+| Process adoption | Manages an existing server on the configured port without restarting it |
 | Tailscale Serve | HTTPS remote page + Bearer token, localhost-bound behind Tailscale |
-| Global / per-model settings | Autostart, llama.cpp path, remote access = global |
+| Global / per-model settings | Autostart, llama.cpp path, server params, VRAM preflight, remote access = global |
 | Legacy migration | Import old profiles / token in one click |
-| Profile export/import | Portable JSON (no local absolute paths) |
+| Profile export/import | Portable JSON (no local absolute paths), includes scheme names |
 | Hardware capability & model selection | Verified context limits, stable-speed ranking, overlay curves, and a Pareto trade-off map by build/model/backend/Vision |
 
 ## Screenshots
@@ -233,7 +252,7 @@ the token, and you can view status, pick a model, and start/stop the server.
 
 The control API binds only to `127.0.0.1:8765` and is exposed exclusively
 through Tailscale Serve HTTPS; every `/api/*` route requires a Bearer token.
-The inference port `8080` is never exposed as the control channel.
+The inference port (configurable, default `8080`) is never exposed as the control channel.
 
 ## Data locations
 
