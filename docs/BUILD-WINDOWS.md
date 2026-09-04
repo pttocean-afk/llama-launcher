@@ -117,16 +117,11 @@ unzip -l dist/LlamaLauncher-Portable-x64.zip   # 期望含 LlamaLauncher.exe + _
 
 > `dist/` 已列入 `.gitignore`，產物不入 git；要發布才上傳 GitHub Releases。
 
-## 2. Windows 側 pytest 的 4 個「正常」失敗（勿誤判為回歸）
+## 2. Windows pytest 必須全綠
 
-| 測試 | 原因 |
-|---|---|
-| `test_app_security.py::test_control_server_bind_failure_is_observable` | tkinter 需要桌面 session（interop session 無桌面） |
-| `test_app_security.py::test_end_to_end_control_api_over_http` | 同上（urllib/Tk 環境） |
-| `test_host.py::test_autostart_toggle` | 依賴 Windows registry/autostart 狀態 |
-| `test_reasoning_effort.py::test_settings_dialog_*`（偶發 1 個） | tkinter/Tcl 初始化（`tcl_findLibrary`），有桌面 session 就會過 |
+GitHub Actions 的 Windows runner 是正式驗證環境，測試不應再接受「平台正常失敗」。Linux-only autostart 測試會在 Windows skip；Control API bind failure 使用 deterministic monkeypatch，不依賴 Windows `SO_REUSEADDR` 行為。
 
-**程式邏輯測試的權威來源是 Linux 側**：`xvfb-run -a .venv-build/bin/python -m pytest -q`（目前 122 passed）。
+Workflow 已有獨立 `Test` step，後續打包使用 `build-windows.ps1 -SkipTests`，避免同一 hosted runner 第二次初始化 Tk/Tcl。手動 release 打包仍可不傳 `-SkipTests`，完整重跑測試。
 
 ## 3. 踩過的坑（勿重蹈）
 
@@ -139,13 +134,12 @@ unzip -l dist/LlamaLauncher-Portable-x64.zip   # 期望含 LlamaLauncher.exe + _
 3. **使用者資料夾是 `pttoc`**：所有 Windows 側路徑先找 `C:\Users\pttoc`。
 4. **PyInstaller `--add-data` 分隔符**：Windows 用 `;`（`src\...\assets;assets`）；寫成 `:` 會在 Windows 產生物件檔路徑錯誤。
 5. **PowerShell interop 的路徑**要用 `E:\...` 形式；`Compress-Archive` 的 `-Force` 記得加，避免舊檔殘留報錯。
-6. **Linux 打包別用 Hermes Python**：要用 distro system Python（`python3 -m venv` + `python3-tk`），否則缺 `libtcl9.0.so`。
-7. **CI installer 步驟**：`.github/workflows/windows-build.yml` 的 `build-installer.ps1` 需要 Inno Setup 6，但 workflow 目前沒有安裝步驟；若 CI 上 installer 步驟失敗，先在此 workflow 加 `winget install JRSoftware.InnoSetup`（或等價步驟），本機打包不受影響。
+6. **CI installer 步驟**：`.github/workflows/windows-build.yml` 的 `build-installer.ps1` 需要 Inno Setup 6，但 workflow 目前沒有安裝步驟；若 CI 上 installer 步驟失敗，先在此 workflow 加 `winget install JRSoftware.InnoSetup`（或等價步驟），本機打包不受影響。
 
 ## 4. 相關檔案
 
 - `scripts/build-windows.ps1` — CI/Windows 本機用的 PyInstaller + ZIP 腳本（本 SOP 與之等價）
 - `scripts/build-installer.ps1` — Inno Setup 編譯腳本
 - `installer/LlamaLauncher.iss` — Inno 安裝腳本（AppId/名稱/Reg 設定）
-- `.github/workflows/windows-build.yml`、`linux-build.yml` — push main / tag `v*` 自動建置
-- Linux 手動打包：`PATH="$PWD/.venv-build/bin:$PATH" bash scripts/build-linux.sh` → `dist/LlamaLauncher-Linux-x86_64.tar.gz`
+- `.github/workflows/windows-build.yml` — push `master` / tag `v*` 自動測試與建置
+- Linux workflow 與打包腳本已停止維護並移除

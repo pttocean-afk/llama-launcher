@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "llama-launcher-control"
 version = "0.1.0"
-description = "Cross-platform llama.cpp launcher with tray UI and Tailscale remote control"
+description = "Windows llama.cpp launcher with tray UI, hardware capability analysis, and Tailscale remote control"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["Pillow>=10.0", "pystray>=0.19", "psutil>=5.9"]

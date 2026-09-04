@@ -89,6 +89,15 @@ _MMPROJ_RE = re.compile(r"loaded multimodal model, '([^']+)'")
 _NCTX_RE = re.compile(r"n_ctx_slot = (\d+)")
 _BUILD_RE = re.compile(r"build\s*=\s*(\d{4,6})")
 _BNUM_RE = re.compile(r"(?<![0-9a-z])b(\d{4,6})(?![0-9])")
+_SERVER_READY_RE = re.compile(
+    r"llama_server:\s*listening\s+on\s+https?://", re.IGNORECASE)
+_MODEL_LOADED_RE = re.compile(
+    r"llama_server:\s*model\s+loaded", re.IGNORECASE)
+_STARTUP_FATAL_RE = re.compile(
+    r"failed to load model|error loading model|unable to load model|"
+    r"failed to create (?:llama_)?context|model loading failed|"
+    r"error while loading model",
+    re.IGNORECASE)
 
 _SEPARATOR_RE = re.compile(r"^=+\s*$")
 
@@ -120,6 +129,15 @@ class RunMetadata:
     parallel: int | None
     jinja: bool
     extra_flags: tuple[str, ...]
+    # ``vision_loaded`` is retained as the historical/configured Vision flag.
+    # The fields below distinguish what was requested from what the server
+    # actually confirmed in its output.
+    vision_requested: bool = False
+    vision_ready: bool = False
+    # ready = listening line (or completed legacy sample), failed = fatal
+    # startup evidence without readiness, unknown = incomplete/old log.
+    startup_status: str = UNKNOWN
+    startup_error_kind: str | None = None
     warnings: tuple[str, ...] = ()
 
 
@@ -376,8 +394,12 @@ def _scan_body(lines: list[str], body_start: int, warnings: list[str]
     tasks: dict[tuple[int | None, int | None], _TaskState] = {}
     order: list[tuple[int | None, int | None]] = []
     active: _TaskState | None = None
-    evidence: dict = {"cuda": False, "vulkan": False, "build": None,
-                      "model_path": None, "mmproj_path": None, "n_ctx": None}
+    evidence: dict = {
+        "cuda": False, "vulkan": False, "build": None,
+        "model_path": None, "mmproj_path": None, "n_ctx": None,
+        "server_ready": False, "model_loaded": False,
+        "startup_oom": False, "startup_fatal": False,
+    }
 
     def _get_state(slot: int, task: int, lineno: int) -> _TaskState:
         key = (slot, task)
@@ -414,6 +436,12 @@ def _scan_body(lines: list[str], body_start: int, warnings: list[str]
             evidence["cuda"] = True
         if not evidence["vulkan"] and _VULKAN_EVIDENCE_RE.search(line):
             evidence["vulkan"] = True
+        if _SERVER_READY_RE.search(line):
+            evidence["server_ready"] = True
+        if _MODEL_LOADED_RE.search(line):
+            evidence["model_loaded"] = True
+        if _STARTUP_FATAL_RE.search(line) and not evidence["server_ready"]:
+            evidence["startup_fatal"] = True
 
         # error lines: associate with the active, not-yet-closed task
         if _OOM_RE.search(line):
@@ -423,6 +451,11 @@ def _scan_body(lines: list[str], body_start: int, warnings: list[str]
                 active.has_timing = True  # an observed error keeps the task
                 active.line_end = lineno
             else:
+                # Startup allocation errors have no active task.  A runtime
+                # may recover (for example by retrying another device), so a
+                # later listening line still wins over this evidence.
+                if not evidence["server_ready"]:
+                    evidence["startup_oom"] = True
                 warnings.append(
                     f"unassociated OOM at line {lineno}: {line.strip()[:160]}")
             continue
@@ -618,11 +651,32 @@ def parse_log_text(text: str, *, source_path: str = "<text>") -> ParsedLog:
                            "from log content")
     if model_path is None and evidence["model_path"] is not None:
         model_path = evidence["model_path"]
+    vision_requested = (mmproj_path is not None
+                        or evidence["mmproj_path"] is not None)
     if mmproj_path is None and evidence["mmproj_path"] is not None:
         mmproj_path = evidence["mmproj_path"]
-    vision_loaded = mmproj_path is not None
+    # Compatibility field used by existing filters means Vision configured;
+    # vision_ready below is the stronger server-confirmed signal.
+    vision_loaded = vision_requested
+    vision_ready = evidence["mmproj_path"] is not None
 
     samples = _build_samples(states, vision_loaded, warnings)
+    inference_seen = any(
+        s.completed and s.error_kind is None
+        and ((s.generated_tokens or 0) > 0 or (s.prompt_tokens or 0) > 0)
+        for s in samples)
+    if evidence["server_ready"] or inference_seen:
+        startup_status = "ready"
+        startup_error_kind = None
+    elif evidence["startup_oom"]:
+        startup_status = "failed"
+        startup_error_kind = "oom"
+    elif evidence["startup_fatal"]:
+        startup_status = "failed"
+        startup_error_kind = "model_load"
+    else:
+        startup_status = UNKNOWN
+        startup_error_kind = None
 
     if ctx is None:
         ctx = evidence["n_ctx"]
@@ -667,6 +721,10 @@ def parse_log_text(text: str, *, source_path: str = "<text>") -> ParsedLog:
         parallel=int(flags["parallel"]) if flags.get("parallel") else None,
         jinja=bool(flags.get("jinja", False)),
         extra_flags=flags.get("extra_flags", ()),
+        vision_requested=vision_requested,
+        vision_ready=vision_ready,
+        startup_status=startup_status,
+        startup_error_kind=startup_error_kind,
         warnings=tuple(warnings),
     )
     return ParsedLog(metadata=metadata, samples=samples,

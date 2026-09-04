@@ -1934,11 +1934,11 @@ class LauncherApp:
         ModelLibraryDialog(self.root, self)
 
     def open_performance_viewer(self):
-        """📊 效能分析：單個可重用視窗；重複點擊聚焦既有視窗。"""
-        from .performance_viewer import PerformanceViewer
+        """📊 硬體能力與模型選型；重複點擊聚焦既有視窗。"""
+        from .capability_viewer import CapabilityViewer
         viewer = self.performance_viewer
         if viewer is None or not viewer.winfo_exists():
-            viewer = PerformanceViewer(self.root, LOGS_DIR, LLAMA_DIR)
+            viewer = CapabilityViewer(self.root, LOGS_DIR, LLAMA_DIR)
             self.performance_viewer = viewer
         else:
             viewer.lift()

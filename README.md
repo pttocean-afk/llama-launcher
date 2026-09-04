@@ -2,11 +2,11 @@
 
 # 🦙 Llama Launcher
 
-**本機 `llama.cpp` 伺服器的跨平台桌面控制中心 — Windows / Linux**
+**Windows 上本機 `llama.cpp` 伺服器的桌面控制中心**
 
 啟動、接管、檢視、遠端控制，全部在一個畫面搞定，不用再開 terminal 打指令。
 
-![Windows](https://img.shields.io/badge/Windows-✓-0078D6) ![Linux](https://img.shields.io/badge/Linux-x64-✓-A855F7) ![License](https://img.shields.io/badge/License-MIT-blue) ![tests](https://img.shields.io/badge/tests-122%20passed-green)
+![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6) ![License](https://img.shields.io/badge/License-MIT-blue) ![tests](https://img.shields.io/badge/tests-passing-green)
 
 </div>
 
@@ -20,7 +20,7 @@
 - ✅ 自動接管已在跑的 `llama-server --port 8080`，不重啟、不停你的東西
 - ✅ 整合 Log 檢視，看到 `Vulkan` fallback 還會主動提醒並停止
 - ✅ **Tailscale 遠端控制**：從手機／別台電腦安全的連回來
-- ✅ 雙平台共用同一套核心，Windows / Linux 行為一致
+- ✅ **硬體能力地圖**：比較模型／版本／Backend／Vision 的 Context 上限與速度取捨
 
 ---
 
@@ -39,7 +39,7 @@
 | 💼 全域／個別設定分離 | 開機啟動、llama.cpp 路徑、遠端存取＝全域；模型參數＝個別 |
 | ♻️ 舊資料遷移 | 從舊版 launcher 匯入 profiles／token，一鍵搬家 |
 | 📦 Profile 匯出／匯入 | 可攜 JSON（不含本機路徑），換機/分享輕鬆 |
-| 📊 效能分析 | 解析 logs 依 10K used-context bucket 聚合 decode/prefill 曲線、公平性警告、6 種格式匯出 |
+| 📊 硬體能力與模型選型 | 依 llama.cpp build、模型、Backend、Vision 彙整最大已驗證 Context、穩定速度、疊加曲線與 Pareto 取捨圖 |
 
 ---
 
@@ -68,15 +68,7 @@
 3. 把 GGUF 模型放進它的 `models` 子資料夾（可自行建立子資料夾分類，例如 `models\Coding\qwen.gguf`，掃描會遞迴讀取）
 4. 選好模型 → 按 **START SERVER**
 
-### Linux (x86_64)
-
-```bash
-wget -c https://github.com/pttocean-afk/llama-launcher/releases/latest/download/LlamaLauncher-Linux-x86_64.tar.gz
-tar -xzf LlamaLauncher-Linux-x86_64.tar.gz
-./LlamaLauncher/LlamaLauncher
-```
-
-> 首次啟動會請你挑 `llama-server` 所在資料夾。
+> 本專案目前僅正式支援 Windows 10/11；Linux CI 與發佈產物暫停維護。
 
 ---
 
@@ -95,43 +87,29 @@ tar -xzf LlamaLauncher-Linux-x86_64.tar.gz
 
 ## 🗂️ 資料存放位置
 
-| 平台 | 使用者資料 |
+| 類型 | 位置 |
 |---|---|
-| Windows | `%LOCALAPPDATA%\LlamaLauncher` |
-| Linux | `$XDG_DATA_HOME/LlamaLauncher` 或 `~/.local/share/LlamaLauncher` |
+| Windows 使用者資料 | `%LOCALAPPDATA%\LlamaLauncher` |
 | 測試覆寫 | 用 `LLAMA_LAUNCHER_DATA_DIR` 環境變數 |
 
-程式與資料分離：移除「程式」不影響你的 profiles／設定。
-
----
-
-## 🖥️ 平台行為
-
-| | Windows | Linux |
-|---|---|---|
-| 執行檔 | `llama-server.exe` | `llama-server` |
-| Process 探測 | `psutil` | `psutil` |
-| 遠端存取 | Tailscale Serve HTTPS | Tailscale Serve HTTPS |
-| 關閉按鈕預設 | 縮到系統匣 | 安全退出（tray 支援因桌面而異） |
-| 發佈產物 | Setup EXE ＋ Portable ZIP | Portable x86_64 tar.gz |
-
-電腦專屬路徑皆為本機設定；匯入 profile 不假設 Windows 路徑在 Linux 也有效。
+程式與資料分離：移除「程式」不影響你的 profiles／設定。正式發佈產物為 Windows Setup EXE 與 Portable ZIP。
 
 ---
 
 ## 📊 效能分析
 
-主畫面 → **📊 效能分析**：解析所有 log，依「10K used context」bucket 聚合效能曲線，比較不同 runtime／backend／KV／reasoning 的 decode／prefill 表現。
+主畫面 → **📊 效能分析** 會先開啟「硬體能力與模型選型」dashboard，用現有 logs 回答哪個配置能跑多大 Context、速度要犧牲多少。
 
-- **來源**：預設掃描使用者資料目錄（Windows `%LOCALAPPDATA%\LlamaLauncher\logs`、Linux `~/.local/share/LlamaLauncher/logs`）下所有 `*.log`；若存在 `<llama.cpp 目錄>/launcher-app/logs`（舊版 launcher）會自動偵測納入，也可另匯入單一 log 或整個資料夾。**log 一律唯讀**——工具不會截斷、覆寫、輪替或刪除任何 log。
-- **支援格式**：本 launcher 寫入 header（`# <timestamp>  <profile>` ＋ `# <argv>`）的 `llama-server` log；body 需含 `print_timing`／`stop processing` 行。缺 header 時 metadata 會推斷（附警告）；無法解析的檔案會列在錯誤清單、不影響其他檔案。
-- **比較維度**：Runtime（BeeLlama v0.4.4 / b10621 / legacy…）、Backend（CUDA/Vulkan）、KV pair（`q4_0/q4_0`）、Reasoning（on/off/auto/unknown）、Reasoning effort（default/minimal/low/medium/high/xhigh/max）、Max ctx、Vision（yes/no）、個別 run（每個 log 檔）。
-- **Vision loaded**：啟動時是否載入 `--mmproj` 多模態模型檔（yes＝有載入、no＝沒有、unknown＝無法判斷），反映「啟動設定」，不代表某筆請求實際發了圖片。
-- **Max ctx vs used context**：Max ctx 是啟動時 `-c` 的設定上限；曲線與表格使用「實際 used context」（請求結束時的上下文位置，如 `stop processing` 的 `n_tokens`），歸入 `used_context // 10000 × 10000` 的 bucket（0、10000、20000…）。
-- **10K bucket 統計**：每個 bucket 獨立計算 decode／prefill 的 n、中位數、P25、P75、min、max（percentile 為確定性線性內插）；**空 bucket 不補值**，沒資料就不顯示。
-- **公平性警告**：同一系列內 model／runtime／backend／KV／reasoning／context／vision／GPU 分配／batch 不一致會顯示警告（例如同系列 reasoning on/off 混合）；跨系列差異標註「observational, not a controlled comparison」。
-- **排除規則**：預設排除 generated < 20 tokens 的請求（UI 可調 0/10/20/50/100）；未完成（無 stop）與缺 used context 的請求也排除，HTML/Markdown 匯出會顯示各排除類型的計數。
-- **匯出**：HTML（自包含、無外部依賴）、PNG、SVG、raw CSV（每請求一行）、aggregate CSV（每 bucket×metric 一行）、Markdown；**永不覆寫**既有檔，自動加 `-1`、`-2`… 後綴。
+- **Build 單選**：一次只比較一個 llama.cpp build（例如 `b10770`），避免版本差異污染排名。
+- **模型複選**：依實際啟動次數排序；預設勾選最常用的模型，可全選或清除。
+- **能力總覽**：以模型＋Backend＋Vision＋KV／Reasoning／GPU split 為配置，顯示最大已驗證可推論 Context、最大僅啟動 Context、首次失敗 Context、穩定中位速度與觀測最高速度。
+- **啟動判定**：log 出現 `llama_server: listening` 才算可啟動；至少完成一筆正常 decode 才算可推論。OOM 後若 runtime 最後仍 listening，不會誤判失敗。
+- **Vision 判定**：分開記錄 `--mmproj` 是否被要求及 server 是否真的回報 multimodal model loaded；`ON ✓` 代表已確認載入。
+- **速度曲線比較**：雙擊配置或點橫條即可加入／移除多條曲線；X 軸為實際 used context、Y 軸為 Decode T/S，實線是中位數、陰影是 P25–P75。
+- **Context／速度取捨圖**：散點圖右上角越好，Pareto frontier 標示沒有被其他配置同時在 Context 與速度上超越的選項。
+- **速度品質**：預設排除 generated < 20 tokens；「穩定速度」取最低可用 context bucket 的中位數，另保留觀測最高值供切換。
+- **最大已驗證，不是理論值**：若沒有測過更高 Context，介面不會把目前最高紀錄誤稱為硬體極限；有失敗紀錄時才顯示首次失敗邊界。
+- **來源與匯出**：預設唯讀掃描 `%LOCALAPPDATA%\LlamaLauncher\logs`，也可匯入單檔／資料夾；能力摘要可匯出 CSV。原本 decode/prefill、公平性警告與 HTML/PNG/SVG/CSV/Markdown 匯出保留在「舊版詳細統計 / 匯出」。
 
 ---
 
@@ -143,6 +121,12 @@ python3 -m venv .venv
 .venv/bin/pytest
 ```
 
+**Windows source 測試（不打包）**
+
+```powershell
+.\scripts\run-dev-windows.ps1
+```
+
 **Windows build**
 
 ```powershell
@@ -152,17 +136,9 @@ python3 -m venv .venv
 
 > 本機手動打包的完整 SOP（WSL→Windows interop：Python/PyInstaller/Inno Setup 路徑、逐條指令、踩坑清單）見 [docs/BUILD-WINDOWS.md](docs/BUILD-WINDOWS.md)。
 >
-> 雙平台（Windows + Linux）打包＋GitHub Release 上傳的完整流程見 [docs/RELEASING.md](docs/RELEASING.md)。
+> Windows 打包與 GitHub Release 上傳流程見 [docs/RELEASING.md](docs/RELEASING.md)。
 
-**Linux build**（用 distro 系統 Python，須含 Tk）
-
-```bash
-sudo apt-get install python3-tk python3-venv xvfb
-python3 -m venv .venv-build
-PATH="$PWD/.venv-build/bin:$PATH" bash scripts/build-linux.sh
-```
-
-CI：`.github/workflows/` 提供 Windows / Linux 自動 build＋test。
+CI：`.github/workflows/windows-build.yml` 提供 Windows 自動 test＋build。Linux CI／發佈產物目前停止維護。
 
 ---
 
@@ -193,7 +169,7 @@ CI：`.github/workflows/` 提供 Windows / Linux 自動 build＋test。
 
 ## 🦙 Llama Launcher
 
-**A cross-platform desktop control center for local `llama.cpp` servers — Windows / Linux.**
+**A Windows desktop control center for local `llama.cpp` servers.**
 
 Launch, adopt, log, and remotely control your local llama.cpp server from one
 window — no terminal, no remembering flags.
@@ -211,7 +187,7 @@ GPU split, and remote access are a pain. **Llama Launcher** wraps it all up:
   slow no-parallel-pipeline mode.
 - **Tailscale remote control** — a secure HTTPS control page (Bearer token)
   accessible from your phone or another machine.
-- **One shared core on both OSes** — identical behavior on Windows and Linux.
+- **Hardware capability map** — compare verified context limits and speed trade-offs across models, builds, backends, and Vision modes.
 
 ## Feature snapshot
 
@@ -228,7 +204,7 @@ GPU split, and remote access are a pain. **Llama Launcher** wraps it all up:
 | Global / per-model settings | Autostart, llama.cpp path, remote access = global |
 | Legacy migration | Import old profiles / token in one click |
 | Profile export/import | Portable JSON (no local absolute paths) |
-| Performance analysis | 10K used-context bucket decode/prefill curves, fairness warnings, 6-format export |
+| Hardware capability & model selection | Verified context limits, stable-speed ranking, overlay curves, and a Pareto trade-off map by build/model/backend/Vision |
 
 ## Screenshots
 
@@ -248,13 +224,7 @@ folder containing `llama-server.exe`, drop GGUFs into its `models` subfolder
 (subfolders are scanned recursively, e.g. `models\Coding\qwen.gguf`),
 select a model, press **START SERVER**.
 
-**Linux (x86_64):**
-
-```bash
-wget -c https://github.com/pttocean-afk/llama-launcher/releases/latest/download/LlamaLauncher-Linux-x86_64.tar.gz
-tar -xzf LlamaLauncher-Linux-x86_64.tar.gz
-./LlamaLauncher/LlamaLauncher
-```
+> Official builds currently target Windows 10/11 only. Linux CI and release artifacts are not maintained.
 
 ## Remote access (Tailscale)
 
@@ -268,54 +238,40 @@ The inference port `8080` is never exposed as the control channel.
 
 ## Data locations
 
-| Platform | User data |
+| Type | Location |
 |---|---|
-| Windows | `%LOCALAPPDATA%\LlamaLauncher` |
-| Linux | `$XDG_DATA_HOME/LlamaLauncher` or `~/.local/share/LlamaLauncher` |
+| Windows user data | `%LOCALAPPDATA%\LlamaLauncher` |
 | Test override | `LLAMA_LAUNCHER_DATA_DIR` env var |
 
 ## Performance analysis
 
-Main screen → **📊 效能分析 (Performance analysis)**: parses every log and
-aggregates timings into 10K used-context buckets, so you can compare
-decode/prefill performance across runtimes, backends, KV precision, reasoning,
-and more.
+Main screen → **📊 Performance analysis** opens the hardware-capability and
+model-selection dashboard. It uses observed logs to answer which configuration
+can run at which context and what speed is sacrificed.
 
-- **Sources** — scans all `*.log` in the user data directory by default; a
-  legacy `<llama dir>/launcher-app/logs` is auto-detected. You can also import
-  individual logs or whole folders. **Logs are read-only**: the tool never
-  truncates, rewrites, rotates, or deletes a log.
-- **Supported format** — `llama-server` logs written with this launcher's
-  header (`# <timestamp>  <profile>` + `# <argv>`); the body needs
-  `print_timing` / `stop processing` lines. Without a header the metadata is
-  inferred (with a warning); unparseable files are listed and skipped without
-  affecting the others.
-- **Comparison dimensions** — runtime (BeeLlama v0.4.4 / b10621 / legacy…),
-  backend (CUDA/Vulkan), KV pair (`q4_0/q4_0`), reasoning (on/off/auto/unknown),
-  reasoning effort (default/minimal/low/medium/high/xhigh/max), max ctx,
-  vision (yes/no), or individual run (each log file).
-- **Vision loaded** — whether an `--mmproj` multimodal model file was loaded at
-  launch (yes / no / unknown). It reflects the launch configuration, not
-  whether a particular request actually sent an image.
-- **Max ctx vs used context** — max ctx is the configured `-c` ceiling; the
-  curves and table use the actual used context at request end (e.g. the
-  `n_tokens` in `stop processing`), bucketed as `used_context // 10000 × 10000`
-  (0, 10000, 20000…).
-- **10K bucket stats** — per bucket and per metric: n, median, P25, P75, min,
-  max (deterministic linear-interpolation percentiles). Empty buckets are never
-  fabricated — no data, no row.
-- **Fairness warnings** — a series that mixes model / runtime / backend / KV /
-  reasoning / reasoning effort / context / vision / GPU split / batch shows a
-  warning; cross-series differences are labelled "observational, not a
-  controlled comparison".
-- **Exclusion rules** — requests with generated < 20 tokens are excluded by
-  default (UI adjustable 0/10/20/50/100); incomplete requests (no stop) and
-  requests without a used context are also excluded, with per-class counts in
-  the HTML/Markdown exports.
-- **Exports** — self-contained HTML (no external dependencies), PNG, SVG, raw
-  CSV (one row per request), aggregate CSV (one row per bucket × metric),
-  Markdown. Existing files are never overwritten — a `-1`, `-2`… suffix is
-  added instead.
+- **Single build selector** — compare one llama.cpp build (for example
+  `b10770`) at a time.
+- **Multi-model checklist** — models are sorted by launch count.
+- **Capability overview** — groups by model, backend, Vision, KV, reasoning and
+  GPU split; shows maximum verified inference context, startup-only context,
+  first failed context, stable median speed, and observed peak speed.
+- **Reliable outcomes** — `llama_server: listening` verifies startup; a
+  completed decode verifies inference. A recoverable OOM followed by listening
+  is not misclassified as failure.
+- **Vision evidence** — records both requested `--mmproj` and confirmed
+  multimodal-model loading (`ON ✓`).
+- **Overlay curves** — double-click configurations or click ranking bars to
+  compare median Decode T/S vs actual used context, including P25–P75 bands.
+- **Trade-off map** — Context vs stable-speed scatter with a Pareto frontier;
+  points toward the upper-right offer the strongest trade-off.
+- **No overclaiming** — limits are labelled “maximum verified,” not theoretical
+  hardware limits. A failed boundary is shown only when a higher context was
+  actually observed to fail.
+- **Sources and export** — read-only scan of
+  `%LOCALAPPDATA%\LlamaLauncher\logs`, plus file/folder imports and capability
+  CSV export. The previous detailed decode/prefill analysis and HTML/PNG/SVG/
+  CSV/Markdown exports remain available through **Legacy detailed stats /
+  export**.
 
 ## Development
 
@@ -323,6 +279,12 @@ and more.
 python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 .venv/bin/pytest
+```
+
+**Run Windows source without packaging**
+
+```powershell
+.\scripts\run-dev-windows.ps1
 ```
 
 **Windows build**
@@ -335,16 +297,10 @@ python3 -m venv .venv
 > Manual local packaging SOP (WSL→Windows interop: Python/PyInstaller/Inno Setup
 > paths, exact commands, and known pitfalls) — see [docs/BUILD-WINDOWS.md](docs/BUILD-WINDOWS.md).
 >
-> Full dual-platform (Windows + Linux) packaging + GitHub Release publishing flow:
+> Windows packaging and GitHub Release publishing flow:
 > see [docs/RELEASING.md](docs/RELEASING.md).
 
-**Linux build** (use the distribution system Python with Tk installed)
-
-```bash
-sudo apt-get install python3-tk python3-venv xvfb
-python3 -m venv .venv-build
-PATH="$PWD/.venv-build/bin:$PATH" bash scripts/build-linux.sh
-```
+The official CI and release artifacts currently target Windows only.
 
 ## License
 

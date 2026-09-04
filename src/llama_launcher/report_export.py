@@ -58,8 +58,9 @@ RAW_CSV_COLUMNS = (
     "source_path", "started_at", "profile_name", "model_name",
     "executable_path", "runtime_label", "runtime_version", "backend",
     "kv_k", "kv_v", "reasoning", "reasoning_effort",
-    "configured_context", "vision_loaded",
-    "mmproj_path", "gpu_split", "batch", "ubatch", "parallel", "jinja",
+    "configured_context", "vision_loaded", "vision_requested", "vision_ready",
+    "startup_status", "startup_error_kind", "mmproj_path", "gpu_split",
+    "batch", "ubatch", "parallel", "jinja",
     # timing sample fields
     "task_id", "slot_id", "used_context", "used_context_source",
     "prompt_tokens", "prompt_ms", "prefill_tps", "generated_tokens",
@@ -67,8 +68,9 @@ RAW_CSV_COLUMNS = (
     "reprocessed_tokens", "actual_image_used", "completed", "error_kind",
     "line_start", "line_end",
 )
-_METADATA_COLUMNS = RAW_CSV_COLUMNS[:20]
-_SAMPLE_COLUMNS = RAW_CSV_COLUMNS[20:]
+_SAMPLE_START = RAW_CSV_COLUMNS.index("task_id")
+_METADATA_COLUMNS = RAW_CSV_COLUMNS[:_SAMPLE_START]
+_SAMPLE_COLUMNS = RAW_CSV_COLUMNS[_SAMPLE_START:]
 
 AGGREGATE_CSV_COLUMNS = (
     "series", "bucket_start", "bucket_end", "metric",

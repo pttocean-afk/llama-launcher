@@ -1,215 +1,96 @@
-# 打包與發布 SOP（Windows + Linux）
+# Windows 打包與發布 SOP
 
-本專案每次改版都發布**雙平台**（Windows x64 + Linux x86_64）。本篇是完整流程，跨 session 直接照抄，不要再重新摸索工具鏈。
+本專案目前僅正式維護 **Windows 10/11 x64**。Linux CI、安裝說明與發佈產物暫停；每次 release 只發布 Setup EXE 與 Portable ZIP。
 
-**流程總覽**
+## 流程總覽
 
+```text
+完成功能 → 本機測試 → 讓使用者以 source 實測 → 確認 OK →
+更新 README/截圖 → Windows 打包 → smoke test → GitHub Release → 驗證下載
 ```
-改完程式 → 本地測試過 → README 更新（截圖/徽章）→
-  Windows 打包（docs/BUILD-WINDOWS.md）→ Linux 打包（本篇 §2）→
-  GitHub Release 上傳（本篇 §3）→ 驗證下載
-```
 
----
+> 不要為了每次 UI 微調反覆打包。使用者確認 source 版本後才進入打包階段。
 
-## 0. 前置檢查（每次必做）
+## 1. 前置檢查
 
 ```bash
 cd /home/pttocean/projects/llama-launcher
-
-# 完整測試（tkinter 測試需要顯示伺服器，Linux 用 xvfb）
-xvfb-run -a .venv-build/bin/python -m pytest -q        # 預期全過（目前 122）
-.venv-build/bin/python -m compileall -q src tests      # 語法檢查
-
-# 確認 git 乾淨、README 測試徽章數字與 pytest 一致（見 §4）
+PATH="$PWD/.venv-build-sys/bin:$PATH" xvfb-run -a python -m pytest -q
+.venv-build-sys/bin/python -m compileall -q src tests
+git diff --check
 git status --short
 ```
 
----
+Windows GitHub Actions（`.github/workflows/windows-build.yml`）也必須成功。Workflow 監聽 `master` 與 `v*` tag。
 
-## 1. Windows 打包
+## 2. Windows 本機打包
 
-**不要重新找方法**：完整 SOP 在 [docs/BUILD-WINDOWS.md](BUILD-WINDOWS.md)（WSL→Windows interop、PyInstaller、Inno Setup 路徑、踩坑清單）。
-
-核心指令（詳見該文件）：
+完整 WSL→Windows interop 與 Inno Setup 細節見 [BUILD-WINDOWS.md](BUILD-WINDOWS.md)。核心流程：
 
 ```bash
-# WSL 內
-rsync -a --exclude '.git' --exclude '.venv*' --exclude '__pycache__' \
+cd /home/pttocean/projects/llama-launcher
+rsync -a --delete \
+  --exclude '.git' --exclude '.venv*' --exclude '__pycache__' \
   --exclude '.pytest_cache' --exclude 'build' --exclude 'dist' --exclude '*.pyc' \
   ./ /mnt/e/llama-launcher-build/
 
 cd /mnt/e/llama-launcher-build
-/mnt/c/Windows/py.exe -m PyInstaller --noconfirm --clean --windowed \
-  --name LlamaLauncher --icon "src/llama_launcher/assets/llama-launcher-icon.ico" \
-  --add-data "src/llama_launcher/assets;assets" --paths src scripts/launcher_entry.py
-
-cp README.md dist/LlamaLauncher/README.md
-/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command \
-  "Compress-Archive -Path 'E:\llama-launcher-build\dist\LlamaLauncher\*' -DestinationPath 'E:\llama-launcher-build\dist\LlamaLauncher-Portable-x64.zip' -Force"
-
-cd installer
-"/mnt/c/Users/pttoc/AppData/Local/Programs/Inno Setup 6/ISCC.exe" LlamaLauncher.iss
-
-# 複製回 repo
-cd /home/pttocean/projects/llama-launcher
-cp -f /mnt/e/llama-launcher-build/dist/LlamaLauncher-Setup-x64.exe dist/
-cp -f /mnt/e/llama-launcher-build/dist/LlamaLauncher-Portable-x64.zip dist/
+/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile \
+  -ExecutionPolicy Bypass -File 'E:\llama-launcher-build\scripts\build-windows.ps1'
+/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile \
+  -ExecutionPolicy Bypass -File 'E:\llama-launcher-build\scripts\build-installer.ps1'
 ```
 
-產出：`dist/LlamaLauncher-Setup-x64.exe`、`dist/LlamaLauncher-Portable-x64.zip`
+產物：
 
----
+- `dist/LlamaLauncher-Portable-x64.zip`
+- `dist/LlamaLauncher-Setup-x64.exe`
 
-## 2. Linux 打包
+若 CI 的獨立 Test step 已經完成，build script 可使用 `-SkipTests`；正式手動 release 預設不要跳過。
 
-用 repo 內的 `.venv-build`（**系統 Python，不要用 Hermes 內建 Python**；需有 Tk）：
+## 3. 打包後 smoke test
+
+至少確認：
+
+1. Portable EXE 能啟動，沒有缺少 Tcl/Tk 或 asset。
+2. 能讀取 `%LOCALAPPDATA%\LlamaLauncher` 的既有 profiles/logs。
+3. 主畫面模型子資料夾掃描正常。
+4. 📊 效能分析可開啟能力總覽、速度曲線與取捨圖。
+5. `127.0.0.1:8765` Control API 啟動正常，關閉程式後 port 已釋放。
+6. Setup EXE 可安裝、啟動及解除安裝。
+
+## 4. GitHub Release
+
+1. Commit 並 push `master`，等待 Windows CI 綠燈。
+2. 建立新 tag（不要覆蓋既有 release tag）：
 
 ```bash
-cd /home/pttocean/projects/llama-launcher
-
-# 第一次才需要建 venv：
-#   sudo apt-get install python3-tk python3-venv xvfb
-#   python3 -m venv .venv-build
-
-PATH="$PWD/.venv-build/bin:$PATH" xvfb-run -a bash scripts/build-linux.sh
+VERSION=vX.Y.Z
+git tag "$VERSION"
+git push origin "$VERSION"
 ```
 
-`scripts/build-linux.sh` 自己會：`pip install -e '.[dev]'` → `pytest` → PyInstaller（`--add-data` 用 `:` 分隔、PNG icon）→ 複製 README 與 desktop file → 打包 tar.gz。
+3. Tag workflow 可自動上傳 Windows 產物；若需手動補傳，使用 GitHub Releases 網頁或已儲存的 git credential 呼叫 GitHub API。
+4. Release 說明只列 Windows installer 與 portable，不再宣稱 Linux 支援。
 
-> ⚠️ 腳本內的 pytest 需要顯示伺服器，**一定要包 `xvfb-run -a`**，否則 tkinter 測試會失敗。
-
-產出：`dist/LlamaLauncher-Linux-x86_64.tar.gz`（解壓後為 `LlamaLauncher/` 資料夾）
-
----
-
-## 3. GitHub Release 上傳
-
-用 git 憑證（`credential.helper=store` 已存好 `pttocean-afk` 的 token），透過 `python3` ＋ `urllib` 打 GitHub API，**不需要使用者再給 key**。
-
-> 需要時機：新版本首次發佈（`vX.Y.Z`），或舊 release 補傳資產。重複發佈同一 tag 會失敗，改版就換新 tag。
-
-```bash
-cd /home/pttocean/projects/llama-launcher
-
-cat > /tmp/make_release.py <<'PYEOF'
-import json, subprocess, urllib.request, urllib.error, sys
-
-VERSION = "v0.1.0"                      # ← 每次改版本號
-NAME = "Llama Launcher v0.1.0"          # ← release 顯示名稱
-BODY = ("Windows x64 安裝檔與可攜版，Linux x86_64 tar.gz。\n\n"
-        "Windows installer + portable, Linux x86_64 tarball.")
-
-def get_cred():
-    out = subprocess.run(["git", "credential", "fill"],
-                         input="protocol=https\nhost=github.com\n\n",
-                         capture_output=True, text=True).stdout
-    d = {}
-    for line in out.splitlines():
-        if "=" in line:
-            k, _, v = line.partition("=")
-            d[k] = v
-    return d.get("username"), d.get("password")
-
-user, token = get_cred()
-assert token, "No stored git credential — run: git credential-store 或 gh auth login"
-
-REPO = "pttocean-afk/llama-launcher"
-BASE = f"https://api.github.com/repos/{REPO}"
-
-def api(path, method="GET", body=None):
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(BASE + path, data=data, method=method)
-    req.add_header("Authorization", f"Bearer {token}")
-    req.add_header("Accept", "application/vnd.github+json")
-    req.add_header("User-Agent", "llama-launcher-release-script")
-    try:
-        with urllib.request.urlopen(req) as r:
-            return r.status, json.loads(r.read().decode() or "{}")
-    except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read().decode() or "{}")
-
-status, rel = api("/releases", "POST", {
-    "tag_name": VERSION, "name": NAME, "body": BODY,
-    "draft": False, "prerelease": False,
-})
-print("create release:", status, rel.get("id") or rel.get("message"))
-assert status in (200, 201), "release create failed"
-rid = rel["id"]
-
-for path, name in [
-    ("dist/LlamaLauncher-Setup-x64.exe", "LlamaLauncher-Setup-x64.exe"),
-    ("dist/LlamaLauncher-Portable-x64.zip", "LlamaLauncher-Portable-x64.zip"),
-    ("dist/LlamaLauncher-Linux-x86_64.tar.gz", "LlamaLauncher-Linux-x86_64.tar.gz"),
-]:
-    blob = open(path, "rb").read()
-    url = f"https://uploads.github.com/repos/{REPO}/releases/{rid}/assets?name={name}"
-    req = urllib.request.Request(url, data=blob, method="POST")
-    req.add_header("Authorization", f"Bearer {token}")
-    req.add_header("Accept", "application/vnd.github+json")
-    req.add_header("User-Agent", "llama-launcher-release-script")
-    req.add_header("Content-Type", "application/octet-stream")
-    try:
-        with urllib.request.urlopen(req) as r:
-            a = json.loads(r.read().decode())
-            print("upload", name, "OK")
-    except urllib.error.HTTPError as e:
-        print("upload", name, "FAILED", e.code, e.read().decode()[:300]); sys.exit(1)
-print("RELEASE_DONE")
-PYEOF
-
-.venv-build/bin/python /tmp/make_release.py
-```
-
-**只補傳資產到已存在的 release**（同 tag 不重建）：
-
-```bash
-# 取得 release id
-curl -sL https://api.github.com/repos/pttocean-afk/llama-launcher/releases/tags/vX.Y.Z \
-  | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])"
-# 用上一個腳本但把 create 段改為 GET /releases/tags/<tag>，其餘上傳段相同
-```
-
-**沒有 API 的備案**：網頁 https://github.com/pttocean-afk/llama-launcher/releases/new → 填 tag → 拖曳三個檔案上傳。
-
----
-
-## 4. README 更新（發佈前檢查）
-
-- **測試徽章**：第 9 行 `tests-122%20passed-green`，數字要跟著 `pytest` 結果更新（目前 122）。
-- **截圖**：`docs/screenshot.png`（主畫面）、`docs/screenshot-settings.png`（設定分頁）需反映最新 UI。
-  - 重新截圖方法（無頭環境）：`xvfb-run -a -s "-screen 0 1280x900x24" .venv-build/bin/python`，用 PIL `ImageGrab.grab()` 抓視窗。請參考本 repo 曾用過的截圖腳本（`/tmp/capture_final.py` 樣式），關鍵點：
-    - `app_mod.HAVE_TRAY = False`（Xvfb 無系統匣，pystray 會卡）
-    - 在 `models/` 放假的 `.gguf`/`llama-server` 檔案，避免 `run_first_setup` 彈出模態 `askdirectory` 卡死
-    - `LLAMA_SERVER` 必須指向**真實存在的檔案**，否則會進 first-setup
-- README 雙語（中/英）都要同步改。
-
-改完 README → `git add` → commit → push（README / docs 變更都在 repo 內）。
-
----
-
-## 5. 發佈後驗證
+## 5. 發布後驗證
 
 ```bash
 for u in \
   https://github.com/pttocean-afk/llama-launcher/releases/download/vX.Y.Z/LlamaLauncher-Setup-x64.exe \
-  https://github.com/pttocean-afk/llama-launcher/releases/download/vX.Y.Z/LlamaLauncher-Portable-x64.zip \
-  https://github.com/pttocean-afk/llama-launcher/releases/download/vX.Y.Z/LlamaLauncher-Linux-x86_64.tar.gz ; do
+  https://github.com/pttocean-afk/llama-launcher/releases/download/vX.Y.Z/LlamaLauncher-Portable-x64.zip ; do
   curl -sL -o /dev/null -w "%{http_code} $u\n" "$u"
 done
-# 全部應回 200；角色權限不足時可能回 302，需再 -L 追蹤
 ```
 
----
+兩個網址都應回 HTTP 200。
 
-## 6. 踩坑備忘
+## 常見問題
 
-| 坑 | 解法 |
+| 問題 | 處理方式 |
 |---|---|
-| 忘了版本號、重複建同 tag | GitHub API 回 `422`；改新 tag 或改用「補傳資產」方式 |
-| Linux pytest 掛在 tkinter | 一定要 `xvfb-run -a` 包住整個 build/測試 |
-| `.venv-build` 指向 Hermes Python | Linux build 要用**系統 python3**（`which python3` 檢查）；Hermes venv 沒有 Tk |
-| Windows `--add-data` 用 `:` | Windows 上分隔符是 `;`（`assets;assets`），Linux 才是 `:` |
-| git credential 不存在 | `git config credential.helper store` 後 push 一次存下，或用 `gh auth login` |
-| 改版時 README 徽章/截圖過時 | 見 §4；截圖流程已標準化，別手動截 |
-| dist/ 是 gitignore | 打包產物不上 git，只上 GitHub Releases |
+| 同一 Windows job 重複跑 Tk 測試後 Tcl/Tk 缺檔 | Workflow 保留獨立 Test；打包 step 使用 `build-windows.ps1 -SkipTests` |
+| Windows PyInstaller `--add-data` 寫成 `:` | Windows 分隔符必須是 `;`（`assets;assets`） |
+| 重複建立同一 tag | 改新版本 tag，或只補傳既有 release 資產 |
+| `dist/` 沒出現在 git | 正常；產物被 gitignore，只上傳 GitHub Releases |
+| README 與實際平台不一致 | 中文、英文與 screenshots 必須同步更新；目前正式平台只有 Windows |
