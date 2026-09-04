@@ -30,9 +30,14 @@ jobs:
           printf '{"profiles":[]}\n' > /tmp/llama-launcher-data/profiles.json
           LLAMA_LAUNCHER_DATA_DIR=/tmp/llama-launcher-data xvfb-run -a dist/LlamaLauncher/LlamaLauncher &
           APP_PID=$!
-          for i in $(seq 1 20); do curl -fsS http://127.0.0.1:8765/ >/dev/null && break; sleep 1; done
-          curl -fsS http://127.0.0.1:8765/ | grep -q 'Llama Launcher Control'
-          kill "$APP_PID" || true
+          trap 'kill "$APP_PID" 2>/dev/null || true' EXIT
+          READY=0
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:8765/ >/dev/null; then READY=1; break; fi
+            sleep 1
+          done
+          test "$READY" -eq 1
+          curl -fsS http://127.0.0.1:8765/ | grep -q 'llama.cpp Launcher'
       - uses: actions/upload-artifact@v4
         with:
           name: LlamaLauncher-Linux-x86_64

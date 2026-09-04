@@ -1,3 +1,7 @@
+param(
+  [switch]$SkipTests
+)
+
 $ErrorActionPreference = "Stop"
 $Repo = Split-Path -Parent $PSScriptRoot
 Set-Location $Repo
@@ -6,8 +10,10 @@ Set-Location $Repo
 # 必須在每個原生指令後明確檢查 $LASTEXITCODE。
 python -m pip install -e ".[dev]"
 if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
-python -m pytest
-if ($LASTEXITCODE -ne 0) { throw "pytest failed" }
+if (-not $SkipTests) {
+  python -m pytest
+  if ($LASTEXITCODE -ne 0) { throw "pytest failed" }
+}
 python -m PyInstaller --noconfirm --clean --windowed `
   --name LlamaLauncher `
   --icon "src/llama_launcher/assets/llama-launcher-icon.ico" `

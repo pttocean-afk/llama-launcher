@@ -24,7 +24,8 @@ jobs:
         run: python -m pytest
       - name: Build portable app
         shell: powershell
-        run: .\scripts\build-windows.ps1
+        # Test 已在上一個 step 跑過；避免同一 Windows runner 重複初始化 Tk/Tcl。
+        run: .\scripts\build-windows.ps1 -SkipTests
       - name: Build installer
         shell: powershell
         run: .\scripts\build-installer.ps1
