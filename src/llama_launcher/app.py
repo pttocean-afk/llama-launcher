@@ -320,8 +320,23 @@ def _is_mmproj(name: str) -> bool:
     """判斷是否為視覺投影檔：檔名含 mmproj（不限開頭，如 Agents-A1-mmproj.gguf）。"""
     return "mmproj" in name.lower()
 
+
+# 分片 GGUF 標準命名：...-00001-of-00003.gguf（llama.cpp 只吃第一片，
+# 其餘分片自動串接，如 Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf）
+_SHARD_RE = re.compile(r"-(\d{5})-of-(\d{5})\.gguf$", re.IGNORECASE)
+
+
+def _is_shard_tail(name: str) -> bool:
+    """判斷是否為分片 GGUF 的非首片（00002-of-00003 等）。
+
+    首片是 -00001-of-，尾片照常被排除，避免 87GB 模型在清單出現三筆、
+    還被誤當獨立模型啟動（尾片單獨餵給 llama-server 只會載入殘缺權重）。
+    """
+    match = _SHARD_RE.search(name)
+    return bool(match) and match.group(1) != "00001"
+
 def scan_gguf_files() -> list[str]:
-    """掃描 models 目錄下的 .gguf，排除 mmproj。"""
+    """掃描 models 目錄下的 .gguf，排除 mmproj 與分片尾檔。"""
     models, _mmprojs, _sizes = _model_inventory()
     return list(models)
 
@@ -337,6 +352,7 @@ def _model_inventory() -> tuple[list[str], list[str], dict[str, int]]:
     遞迴掃描子資料夾（網友會自行分類，如 models\\Coding\\qwen.gguf），
     名稱一律是相對於 models 的 POSIX 風格路徑（"Coding/qwen.gguf"）；
     頂層檔案名稱不變（"qwen.gguf"），所以既有 profiles.json 完全相容。
+    分片 GGUF（-0000N-of-000M）只留第一片，尾片不列清單。
     不跟目錄符號連結，避免循環或重複掃描。"""
     global _MODEL_INVENTORY_CACHE
     if _MODEL_INVENTORY_CACHE is not None:
@@ -353,6 +369,8 @@ def _model_inventory() -> tuple[list[str], list[str], dict[str, int]]:
                 for fname in sorted(filenames, key=str.lower):
                     if not fname.lower().endswith(".gguf"):
                         continue
+                    if _is_shard_tail(fname):
+                        continue  # 分片尾檔：由首片自動串接，不列入清單
                     f = Path(dirpath) / fname
                     # 相對路徑當名稱；頂層檔案就只是檔名
                     rel = f.relative_to(MODELS_DIR).as_posix()
@@ -452,6 +470,9 @@ def guess_mmproj(model_name: str, mmproj_list: list[str]) -> str:
         ("qwen3.6-35b", "mmproj-qwen35-F16.gguf"),
         ("qwen35", "mmproj-qwen35-F16.gguf"),
         ("35b-a3b", "mmproj-qwen35-F16.gguf"),
+        ("qwen3.8", "mmproj-Qwen3.8-Flash-Next-F16.gguf"),
+        ("qwen3.8-flash-next", "mmproj-Qwen3.8-Flash-Next-F16.gguf"),
+        ("flash-next", "mmproj-Qwen3.8-Flash-Next-F16.gguf"),
         ("27b", "mmproj-model-f16.gguf"),
     ]
     base = model_name.lower()

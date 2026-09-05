@@ -97,6 +97,65 @@ def test_guess_mmproj_matches_rule_by_basename(scan_env):
     assert got == "Vision/Agents-A1-mmproj.gguf"
 
 
+def test_scan_filters_shard_tails(tmp_path, monkeypatch):
+    """分片 GGUF 只留第一片：00002-of-00003 不列清單（Qwen3.8-Flash-Next 情境）。"""
+    monkeypatch.setenv("LLAMA_LAUNCHER_DATA_DIR", str(tmp_path / "data"))
+    import llama_launcher.app as app
+
+    models = tmp_path / "llama" / "models" / "UD-IQ4_XS"
+    models.mkdir(parents=True)
+    (models / "Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf").write_bytes(b"a")
+    (models / "Qwen3.8-Flash-Next-UD-IQ4_XS-00002-of-00003.gguf").write_bytes(b"b")
+    (models / "Qwen3.8-Flash-Next-UD-IQ4_XS-00003-of-00003.gguf").write_bytes(b"c")
+    (models / "mmproj-Qwen3.8-Flash-Next-F16.gguf").write_bytes(b"v")
+    monkeypatch.setattr(app, "MODELS_DIR",
+                        tmp_path / "llama" / "models")
+    app.invalidate_model_inventory()
+    try:
+        assert app.scan_gguf_files() == [
+            "UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf"]
+        assert app.scan_mmproj_files() == [
+            "UD-IQ4_XS/mmproj-Qwen3.8-Flash-Next-F16.gguf"]
+    finally:
+        app.invalidate_model_inventory()
+
+
+def test_scan_keeps_single_shard_model(tmp_path, monkeypatch):
+    """單片式 -00001-of-00001 不是尾片，照常列出。"""
+    monkeypatch.setenv("LLAMA_LAUNCHER_DATA_DIR", str(tmp_path / "data"))
+    import llama_launcher.app as app
+
+    models = tmp_path / "llama" / "models"
+    models.mkdir(parents=True)
+    (models / "solo-00001-of-00001.gguf").write_bytes(b"a")
+    monkeypatch.setattr(app, "MODELS_DIR", models)
+    app.invalidate_model_inventory()
+    try:
+        assert app.scan_gguf_files() == ["solo-00001-of-00001.gguf"]
+    finally:
+        app.invalidate_model_inventory()
+
+
+def test_guess_mmproj_qwen38_flash_next(tmp_path, monkeypatch):
+    """Qwen3.8-Flash-Next 首片自動配對 mmproj-Qwen3.8-Flash-Next-F16.gguf。"""
+    monkeypatch.setenv("LLAMA_LAUNCHER_DATA_DIR", str(tmp_path / "data"))
+    import llama_launcher.app as app
+
+    models = tmp_path / "llama" / "models" / "UD-IQ4_XS"
+    models.mkdir(parents=True)
+    (models / "Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf").write_bytes(b"a")
+    (models / "mmproj-Qwen3.8-Flash-Next-F16.gguf").write_bytes(b"v")
+    monkeypatch.setattr(app, "MODELS_DIR", tmp_path / "llama" / "models")
+    app.invalidate_model_inventory()
+    try:
+        got = app.guess_mmproj(
+            "UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf",
+            app.scan_mmproj_files())
+        assert got == "UD-IQ4_XS/mmproj-Qwen3.8-Flash-Next-F16.gguf"
+    finally:
+        app.invalidate_model_inventory()
+
+
 def test_start_reports_missing_subfolder_model(scan_env, monkeypatch):
     """ServerManager.start 對子資料夾模型路徑的錯誤訊息可讀。"""
     app = scan_env

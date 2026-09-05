@@ -70,7 +70,7 @@
 
 1. 到本專案的 [Releases](https://github.com/pttocean-afk/llama-launcher/releases)下載 `LlamaLauncher-Setup-X.Y.Z-x64.exe` 安裝，或解壓 `LlamaLauncher-Portable-X.Y.Z-x64.zip`（`X.Y.Z` 是版號）
 2. 啟動後選擇**包含 `llama-server.exe` 的資料夾**
-3. 把 GGUF 模型放進它的 `models` 子資料夾（可自行建立子資料夾分類，例如 `models\Coding\qwen.gguf`，掃描會遞迴讀取）
+3. 把 GGUF 模型放進它的 `models` 子資料夾（可自行建立子資料夾分類，例如 `models\Coding\qwen.gguf`，掃描會遞迴讀取）；分片模型（如 `Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf`）整組放同一個資料夾即可，清單只會顯示第一片，其餘分片由 llama.cpp 自動串接
 4. 選好模型 → 按 **START SERVER**
 
 > 本專案目前僅正式支援 Windows 10/11；Linux CI 與發佈產物暫停維護。
