@@ -1,5 +1,5 @@
 #define MyAppName "Llama Launcher"
-#define MyAppVersion "0.4.1"
+#define MyAppVersion "0.4.2"
 #define MyAppPublisher "Llama Launcher contributors"
 #define MyAppExeName "LlamaLauncher.exe"
 
